@@ -6,8 +6,8 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const { summariseTranscript, ask, MODEL } = require('./claude');
 
-if (!process.env.ANTHROPIC_API_KEY) {
-  console.error('❌ ANTHROPIC_API_KEY is not set. Copy .env.example to .env and add your key.');
+if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
+  console.error('❌ ANTHROPIC_API_KEY is missing or still the placeholder. Edit .env and paste your real key from https://console.anthropic.com/');
   process.exit(1);
 }
 
@@ -33,12 +33,33 @@ const DEFAULT_SUMMARY_COUNT = parseInt(process.env.SUMMARY_MESSAGE_COUNT, 10) ||
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '..', '.wwebjs_auth') }),
   puppeteer: {
+    // Use a system-installed Chrome/Edge if CHROME_PATH is set; otherwise fall
+    // back to Puppeteer's bundled Chromium.
+    executablePath: process.env.CHROME_PATH || undefined,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   },
 });
 
-client.on('qr', (qr) => {
-  console.log('\n📱 Open WhatsApp on your phone → Settings → Linked Devices → Link a Device, then scan:\n');
+let pairingRequested = false;
+client.on('qr', async (qr) => {
+  // If a phone number is configured, link by pairing CODE instead of QR.
+  // Use this when the bot runs on the same phone you're linking (you can't
+  // scan an on-screen QR with that phone's own camera).
+  const phone = (process.env.PAIRING_PHONE_NUMBER || '').replace(/[^0-9]/g, '');
+  if (phone) {
+    if (pairingRequested) return;
+    pairingRequested = true;
+    try {
+      const code = await client.requestPairingCode(phone);
+      console.log('\n🔗 On WhatsApp: Settings → Linked Devices → Link a Device →');
+      console.log('   tap "Link with phone number instead", then enter this code:\n');
+      console.log(`        ${code}\n`);
+    } catch (err) {
+      console.error('❌ Could not get a pairing code:', err.message);
+    }
+    return;
+  }
+  console.log('\n📱 Open WhatsApp on another device → Settings → Linked Devices → Link a Device, then scan:\n');
   qrcode.generate(qr, { small: true });
 });
 

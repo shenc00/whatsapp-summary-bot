@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-summary-bot",
+  "version": "1.0.0",
+  "description": "A personal WhatsApp bot that summarises group-chat discussions and can auto-reply, powered by Claude.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "dotenv": "^16.4.7",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.26.0"
+  }
+}

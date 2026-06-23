@@ -1,0 +1,7 @@
+node_modules/
+.env
+autoreply.json
+
+# whatsapp-web.js session + Puppeteer cache (contains your linked-device session — never commit)
+.wwebjs_auth/
+.wwebjs_cache/

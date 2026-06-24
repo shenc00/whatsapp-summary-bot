@@ -4,7 +4,15 @@ const fs = require('fs');
 const path = require('path');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const { summariseTranscript, summariseByPerson, summariseMeetup, extractAbsurdComments, ask, MODEL } = require('./claude');
+const {
+  summariseTranscript,
+  summariseByPerson,
+  summariseMeetup,
+  extractAbsurdComments,
+  ask,
+  isOverloaded,
+  MODEL,
+} = require('./claude');
 
 if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
   console.error('❌ ANTHROPIC_API_KEY is missing or still the placeholder. Edit .env and paste your real key from https://console.anthropic.com/');
@@ -63,25 +71,15 @@ client.on('auth_failure', (m) => console.error('❌ Auth failure:', m));
 client.on('disconnected', (r) => console.warn('⚠️  Disconnected:', r));
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
-  console.log('   Commands: !summary · !personal · !meetup · !absurd · !ai · !autoreply · !help');
+  console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !meetup · !absurd · !ai · !autoreply · !help');
 });
 
 // ---------------------------------------------------------------------------
-// Private reply helper.
-// Deletes the command message from the chat and sends the result only to the
-// user's own "Saved Messages" chat — invisible to everyone else.
+// `!chats [filter]` lists chats with a number you reference in other
+// commands (e.g. `!summary 2 100`). Cached in memory between commands so the
+// numbers stay stable until you run `!chats` again.
 // ---------------------------------------------------------------------------
-async function replyPrivate(msg, text) {
-  // Delete the command message so others don't see it was triggered.
-  try {
-    await msg.delete(true);
-  } catch {
-    // Ignore — message may already be gone or outside the delete window.
-  }
-  // Send the result to the user's own saved-messages / self-chat.
-  const selfId = client.info.wid._serialized;
-  await client.sendMessage(selfId, text);
-}
+let lastChatList = [];
 
 // Build a "Name: message" transcript from a list of wwebjs messages.
 async function buildTranscript(messages) {
@@ -100,129 +98,160 @@ async function buildTranscript(messages) {
   return lines.join('\n');
 }
 
+function overloadOrGenericMessage(err) {
+  return isOverloaded(err)
+    ? '⚠️ Claude is overloaded right now — please try again in a minute.'
+    : '⚠️ Something went wrong handling that command.';
+}
+
 // ---------------------------------------------------------------------------
-// Commands. Triggered by message_create so your own typed commands are caught.
-// All results are delivered privately to your Saved Messages.
+// Commands. ONLY processed when typed in your own "Saved Messages" chat, so
+// nothing is ever posted to (or deleted from) any group/contact chat — zero
+// trace there, by construction, instead of relying on delete-for-everyone
+// (which still leaves a "This message was deleted" placeholder for others).
 // ---------------------------------------------------------------------------
 client.on('message_create', async (msg) => {
   const body = (msg.body || '').trim();
-  if (!body.startsWith('!')) return;
+  if (!body.startsWith('!') || !msg.fromMe) return;
 
-  // Only respond to commands typed by the bot account owner (you), not others.
-  if (!msg.fromMe) return;
+  const selfChat = await msg.getChat();
+  if (selfChat.id._serialized !== client.info.wid._serialized) return;
 
   try {
-    const chat = await msg.getChat();
     const [cmd, ...rest] = body.split(/\s+/);
     const command = cmd.toLowerCase();
 
+    if (command === '!chats') {
+      const filter = rest.join(' ').trim().toLowerCase();
+      const chats = await client.getChats();
+      lastChatList = (filter ? chats.filter((c) => (c.name || '').toLowerCase().includes(filter)) : chats).slice(0, 30);
+      if (!lastChatList.length) {
+        await selfChat.sendMessage('_(No matching chats found.)_');
+        return;
+      }
+      const lines = lastChatList.map((c, i) => `${i + 1}. ${c.name || c.id.user}${c.isGroup ? ' (group)' : ''}`);
+      await selfChat.sendMessage('*Chats* — use the number in other commands, e.g. `!summary 2 100`:\n\n' + lines.join('\n'));
+      return;
+    }
+
+    const NEEDS_TARGET = ['!summary', '!summarise', '!summarize', '!personal', '!whosaid', '!meetup', '!absurd', '!ridiculous', '!autoreply'];
+    let targetChat = null;
+    let args = rest;
+    if (NEEDS_TARGET.includes(command)) {
+      const idx = parseInt(rest[0], 10);
+      if (!idx || idx < 1 || idx > lastChatList.length) {
+        await selfChat.sendMessage('Run `!chats [filter]` first, then use the listed number, e.g. `!summary 2 100`.');
+        return;
+      }
+      targetChat = lastChatList[idx - 1];
+      args = rest.slice(1);
+    }
+
     if (['!summary', '!summarise', '!summarize'].includes(command)) {
-      const n = parseInt(rest[0], 10) || DEFAULT_SUMMARY_COUNT;
-      await chat.sendStateTyping();
-      const messages = await chat.fetchMessages({ limit: n });
+      const n = parseInt(args[0], 10) || DEFAULT_SUMMARY_COUNT;
+      await selfChat.sendStateTyping();
+      const messages = await targetChat.fetchMessages({ limit: n });
       const transcript = await buildTranscript(messages);
       if (!transcript) {
-        await replyPrivate(msg, '_(Nothing to summarise — no recent text messages found.)_');
+        await selfChat.sendMessage('_(Nothing to summarise — no recent text messages found.)_');
         return;
       }
       const summary = await summariseTranscript(transcript);
-      await replyPrivate(msg, `📋 *Summary of the last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
+      await selfChat.sendMessage(`📋 *Summary of the last ${messages.length} messages*\n_(from: ${targetChat.name || 'chat'})_\n\n${summary}`);
 
     } else if (['!personal', '!whosaid'].includes(command)) {
-      // !personal [N]            — breakdown for everyone
-      // !personal <name> [N]     — just that person's contributions
-      const args = [...rest];
+      // !personal <chat#> [N]            — breakdown for everyone
+      // !personal <chat#> <name> [N]     — just that person's contributions
+      const a = [...args];
       let n = DEFAULT_SUMMARY_COUNT;
-      if (args.length && /^\d+$/.test(args[args.length - 1])) {
-        n = parseInt(args.pop(), 10);
+      if (a.length && /^\d+$/.test(a[a.length - 1])) {
+        n = parseInt(a.pop(), 10);
       }
-      const personName = args.length ? args.join(' ') : null;
+      const personName = a.length ? a.join(' ') : null;
 
-      await chat.sendStateTyping();
-      const messages = await chat.fetchMessages({ limit: n });
+      await selfChat.sendStateTyping();
+      const messages = await targetChat.fetchMessages({ limit: n });
       const transcript = await buildTranscript(messages);
       if (!transcript) {
-        await replyPrivate(msg, '_(Nothing to summarise — no recent text messages found.)_');
+        await selfChat.sendMessage('_(Nothing to summarise — no recent text messages found.)_');
         return;
       }
       const summary = await summariseByPerson(transcript, personName);
       const label = personName
         ? `👤 *${personName} — last ${messages.length} messages*`
         : `👥 *Who said what — last ${messages.length} messages*`;
-      await replyPrivate(msg, `${label}\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
+      await selfChat.sendMessage(`${label}\n_(from: ${targetChat.name || 'chat'})_\n\n${summary}`);
 
     } else if (command === '!meetup') {
-      const n = parseInt(rest[0], 10) || DEFAULT_SUMMARY_COUNT;
-      await chat.sendStateTyping();
-      const messages = await chat.fetchMessages({ limit: n });
+      const n = parseInt(args[0], 10) || DEFAULT_SUMMARY_COUNT;
+      await selfChat.sendStateTyping();
+      const messages = await targetChat.fetchMessages({ limit: n });
       const transcript = await buildTranscript(messages);
       if (!transcript) {
-        await replyPrivate(msg, '_(No messages found.)_');
+        await selfChat.sendMessage('_(No messages found.)_');
         return;
       }
       const summary = await summariseMeetup(transcript);
-      await replyPrivate(msg, `📅 *Meetup/outing summary — last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
+      await selfChat.sendMessage(`📅 *Meetup/outing summary — last ${messages.length} messages*\n_(from: ${targetChat.name || 'chat'})_\n\n${summary}`);
 
     } else if (['!absurd', '!ridiculous'].includes(command)) {
-      const n = parseInt(rest[0], 10) || DEFAULT_SUMMARY_COUNT;
-      await chat.sendStateTyping();
-      const messages = await chat.fetchMessages({ limit: n });
+      const n = parseInt(args[0], 10) || DEFAULT_SUMMARY_COUNT;
+      await selfChat.sendStateTyping();
+      const messages = await targetChat.fetchMessages({ limit: n });
       const transcript = await buildTranscript(messages);
       if (!transcript) {
-        await replyPrivate(msg, '_(No messages found.)_');
+        await selfChat.sendMessage('_(No messages found.)_');
         return;
       }
       const summary = await extractAbsurdComments(transcript);
-      await replyPrivate(msg, `🤡 *Absurd comments — last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
+      await selfChat.sendMessage(`🤡 *Absurd comments — last ${messages.length} messages*\n_(from: ${targetChat.name || 'chat'})_\n\n${summary}`);
 
     } else if (command === '!ai') {
       const question = rest.join(' ').trim();
       if (!question) {
-        await replyPrivate(msg, 'Usage: !ai <your question>');
+        await selfChat.sendMessage('Usage: !ai <your question>');
         return;
       }
-      await chat.sendStateTyping();
+      await selfChat.sendStateTyping();
       const reply = await ask(question);
-      await replyPrivate(msg, reply);
+      await selfChat.sendMessage(reply);
 
     } else if (command === '!autoreply') {
-      const arg = (rest[0] || '').toLowerCase();
-      const id = chat.id._serialized;
+      const arg = (args[0] || '').toLowerCase();
+      const id = targetChat.id._serialized;
       if (arg === 'on') {
         autoReplyChats.add(id);
         saveState();
-        await replyPrivate(msg, `🤖 Auto-reply *enabled* for: ${chat.name || 'this chat'}`);
+        await selfChat.sendMessage(`🤖 Auto-reply *enabled* for: ${targetChat.name || 'this chat'}`);
       } else if (arg === 'off') {
         autoReplyChats.delete(id);
         saveState();
-        await replyPrivate(msg, `🤖 Auto-reply *disabled* for: ${chat.name || 'this chat'}`);
+        await selfChat.sendMessage(`🤖 Auto-reply *disabled* for: ${targetChat.name || 'this chat'}`);
       } else {
-        await replyPrivate(msg, 'Usage: !autoreply on | off');
+        await selfChat.sendMessage('Usage: !autoreply <chat#> on | off');
       }
 
     } else if (command === '!help') {
-      await replyPrivate(
-        msg,
+      await selfChat.sendMessage(
         '*WhatsApp Summary Bot*\n' +
-          '• `!summary [N]` — overall summary of last N messages\n' +
-          '• `!personal [N]` — per-person breakdown of last N messages\n' +
-          '• `!personal <name> [N]` — just that person\'s contributions\n' +
-          '• `!meetup [N]` — extract meetup/outing plans from last N messages\n' +
-          '• `!absurd [N]` — flag absurd/illogical comments, with names\n' +
+          'Type commands here, in Saved Messages — nothing is ever posted to or ' +
+          'deleted from your other chats.\n\n' +
+          '• `!chats [filter]` — list chats with numbers to use below\n' +
+          '• `!summary <chat#> [N]` — overall summary of last N messages\n' +
+          '• `!personal <chat#> [N]` — per-person breakdown\n' +
+          '• `!personal <chat#> <name> [N]` — just that person\'s contributions\n' +
+          '• `!meetup <chat#> [N]` — extract meetup/outing plans\n' +
+          '• `!absurd <chat#> [N]` — flag absurd/illogical comments, with names\n' +
           '• `!ai <question>` — ask Claude anything\n' +
-          '• `!autoreply on|off` — toggle auto-replies in this chat\n' +
+          '• `!autoreply <chat#> on|off` — toggle auto-replies in a chat\n' +
           '• `!help` — show this message\n\n' +
-          '_All results are sent privately to your Saved Messages. Default N = ' + DEFAULT_SUMMARY_COUNT + '._'
+          '_Default N = ' + DEFAULT_SUMMARY_COUNT + '. Chat numbers come from your last `!chats`._'
       );
     }
   } catch (err) {
     console.error('Command error:', err.message || err);
-    const isOverloaded = err.status === 529 || err.error?.error?.type === 'overloaded_error';
-    const userMessage = isOverloaded
-      ? '⚠️ Claude is overloaded right now — please try again in a minute.'
-      : '⚠️ Something went wrong handling that command.';
     try {
-      await replyPrivate(msg, userMessage);
+      await selfChat.sendMessage(overloadOrGenericMessage(err));
     } catch {
       /* ignore */
     }

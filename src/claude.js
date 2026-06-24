@@ -24,8 +24,26 @@ function textOf(message) {
     .trim();
 }
 
+function isOverloaded(err) {
+  return err?.status === 529 || err?.error?.error?.type === 'overloaded_error';
+}
+
+// On top of the SDK's own internal retries, retry overload errors a few more
+// times with longer backoff — overload spikes can outlast the SDK's budget.
+async function createWithRetry(params, { attempts = 3, baseDelayMs = 4000 } = {}) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await client.messages.create(params);
+    } catch (err) {
+      const lastAttempt = i === attempts - 1;
+      if (!isOverloaded(err) || lastAttempt) throw err;
+      await new Promise((r) => setTimeout(r, baseDelayMs * (i + 1)));
+    }
+  }
+}
+
 async function summariseTranscript(transcript) {
-  const message = await client.messages.create({
+  const message = await createWithRetry({
     model: MODEL,
     max_tokens: 2048,
     ...THINKING_PARAM,
@@ -60,7 +78,7 @@ async function summariseByPerson(transcript, personName = null) {
       'Order people by how much they contributed (most first). ' +
       'Be concise and neutral. Do not invent anything not in the transcript.';
 
-  const message = await client.messages.create({
+  const message = await createWithRetry({
     model: MODEL,
     max_tokens: personName ? 1024 : 3000,
     ...THINKING_PARAM,
@@ -76,7 +94,7 @@ async function summariseByPerson(transcript, personName = null) {
 }
 
 async function summariseMeetup(transcript) {
-  const message = await client.messages.create({
+  const message = await createWithRetry({
     model: MODEL,
     max_tokens: 2048,
     ...THINKING_PARAM,
@@ -99,7 +117,7 @@ async function summariseMeetup(transcript) {
 }
 
 async function extractAbsurdComments(transcript) {
-  const message = await client.messages.create({
+  const message = await createWithRetry({
     model: MODEL,
     max_tokens: 2048,
     ...THINKING_PARAM,
@@ -124,7 +142,7 @@ async function extractAbsurdComments(transcript) {
 }
 
 async function ask(userMessage) {
-  const message = await client.messages.create({
+  const message = await createWithRetry({
     model: MODEL,
     max_tokens: 1024,
     ...THINKING_PARAM,
@@ -143,5 +161,6 @@ module.exports = {
   summariseMeetup,
   extractAbsurdComments,
   ask,
+  isOverloaded,
   MODEL,
 };

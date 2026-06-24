@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const { summariseTranscript, ask, MODEL } = require('./claude');
+const { summariseTranscript, summariseByPerson, summariseMeetup, ask, MODEL } = require('./claude');
 
 if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
   console.error('❌ ANTHROPIC_API_KEY is missing or still the placeholder. Edit .env and paste your real key from https://console.anthropic.com/');
@@ -33,8 +33,6 @@ const DEFAULT_SUMMARY_COUNT = parseInt(process.env.SUMMARY_MESSAGE_COUNT, 10) ||
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: path.join(__dirname, '..', '.wwebjs_auth') }),
   puppeteer: {
-    // Use a system-installed Chrome/Edge if CHROME_PATH is set; otherwise fall
-    // back to Puppeteer's bundled Chromium.
     executablePath: process.env.CHROME_PATH || undefined,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   },
@@ -42,9 +40,6 @@ const client = new Client({
 
 let pairingRequested = false;
 client.on('qr', async (qr) => {
-  // If a phone number is configured, link by pairing CODE instead of QR.
-  // Use this when the bot runs on the same phone you're linking (you can't
-  // scan an on-screen QR with that phone's own camera).
   const phone = (process.env.PAIRING_PHONE_NUMBER || '').replace(/[^0-9]/g, '');
   if (phone) {
     if (pairingRequested) return;
@@ -68,14 +63,31 @@ client.on('auth_failure', (m) => console.error('❌ Auth failure:', m));
 client.on('disconnected', (r) => console.warn('⚠️  Disconnected:', r));
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
-  console.log('   Commands: !summary [N] · !ai <question> · !autoreply on|off · !help');
+  console.log('   Commands: !summary · !personal · !meetup · !ai · !autoreply · !help');
 });
+
+// ---------------------------------------------------------------------------
+// Private reply helper.
+// Deletes the command message from the chat and sends the result only to the
+// user's own "Saved Messages" chat — invisible to everyone else.
+// ---------------------------------------------------------------------------
+async function replyPrivate(msg, text) {
+  // Delete the command message so others don't see it was triggered.
+  try {
+    await msg.delete(true);
+  } catch {
+    // Ignore — message may already be gone or outside the delete window.
+  }
+  // Send the result to the user's own saved-messages / self-chat.
+  const selfId = client.info.wid._serialized;
+  await client.sendMessage(selfId, text);
+}
 
 // Build a "Name: message" transcript from a list of wwebjs messages.
 async function buildTranscript(messages) {
   const lines = [];
   for (const m of messages) {
-    if (!m.body) continue; // skip media / system messages with no text
+    if (!m.body) continue;
     let name = 'Unknown';
     try {
       const c = await m.getContact();
@@ -89,12 +101,15 @@ async function buildTranscript(messages) {
 }
 
 // ---------------------------------------------------------------------------
-// Commands. We listen on `message_create` so they work whether YOU type them
-// or someone else does. Anything starting with "!" is treated as a command.
+// Commands. Triggered by message_create so your own typed commands are caught.
+// All results are delivered privately to your Saved Messages.
 // ---------------------------------------------------------------------------
 client.on('message_create', async (msg) => {
   const body = (msg.body || '').trim();
   if (!body.startsWith('!')) return;
+
+  // Only respond to commands typed by the bot account owner (you), not others.
+  if (!msg.fromMe) return;
 
   try {
     const chat = await msg.getChat();
@@ -107,47 +122,78 @@ client.on('message_create', async (msg) => {
       const messages = await chat.fetchMessages({ limit: n });
       const transcript = await buildTranscript(messages);
       if (!transcript) {
-        await chat.sendMessage('Nothing to summarise — no recent text messages found.');
+        await replyPrivate(msg, '_(Nothing to summarise — no recent text messages found.)_');
         return;
       }
       const summary = await summariseTranscript(transcript);
-      await chat.sendMessage(`📋 *Summary of the last ${messages.length} messages*\n\n${summary}`);
+      await replyPrivate(msg, `📋 *Summary of the last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
+
+    } else if (['!personal', '!whosaid'].includes(command)) {
+      const n = parseInt(rest[0], 10) || DEFAULT_SUMMARY_COUNT;
+      await chat.sendStateTyping();
+      const messages = await chat.fetchMessages({ limit: n });
+      const transcript = await buildTranscript(messages);
+      if (!transcript) {
+        await replyPrivate(msg, '_(Nothing to summarise — no recent text messages found.)_');
+        return;
+      }
+      const summary = await summariseByPerson(transcript);
+      await replyPrivate(msg, `👥 *Who said what — last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
+
+    } else if (command === '!meetup') {
+      const n = parseInt(rest[0], 10) || DEFAULT_SUMMARY_COUNT;
+      await chat.sendStateTyping();
+      const messages = await chat.fetchMessages({ limit: n });
+      const transcript = await buildTranscript(messages);
+      if (!transcript) {
+        await replyPrivate(msg, '_(No messages found.)_');
+        return;
+      }
+      const summary = await summariseMeetup(transcript);
+      await replyPrivate(msg, `📅 *Meetup/outing summary — last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
+
     } else if (command === '!ai') {
       const question = rest.join(' ').trim();
       if (!question) {
-        await chat.sendMessage('Usage: !ai <your question>');
+        await replyPrivate(msg, 'Usage: !ai <your question>');
         return;
       }
       await chat.sendStateTyping();
-      await chat.sendMessage(await ask(question));
+      const reply = await ask(question);
+      await replyPrivate(msg, reply);
+
     } else if (command === '!autoreply') {
       const arg = (rest[0] || '').toLowerCase();
       const id = chat.id._serialized;
       if (arg === 'on') {
         autoReplyChats.add(id);
         saveState();
-        await chat.sendMessage('🤖 Auto-reply *enabled* for this chat.');
+        await replyPrivate(msg, `🤖 Auto-reply *enabled* for: ${chat.name || 'this chat'}`);
       } else if (arg === 'off') {
         autoReplyChats.delete(id);
         saveState();
-        await chat.sendMessage('🤖 Auto-reply *disabled* for this chat.');
+        await replyPrivate(msg, `🤖 Auto-reply *disabled* for: ${chat.name || 'this chat'}`);
       } else {
-        await chat.sendMessage('Usage: !autoreply on | off');
+        await replyPrivate(msg, 'Usage: !autoreply on | off');
       }
+
     } else if (command === '!help') {
-      await chat.sendMessage(
+      await replyPrivate(
+        msg,
         '*WhatsApp Summary Bot*\n' +
-          '• `!summary [N]` — summarise the last N messages (default ' + DEFAULT_SUMMARY_COUNT + ')\n' +
+          '• `!summary [N]` — overall summary of last N messages\n' +
+          '• `!personal [N]` — per-person breakdown of last N messages\n' +
+          '• `!meetup [N]` — extract meetup/outing plans from last N messages\n' +
           '• `!ai <question>` — ask Claude anything\n' +
           '• `!autoreply on|off` — toggle auto-replies in this chat\n' +
-          '• `!help` — show this message'
+          '• `!help` — show this message\n\n' +
+          '_All results are sent privately to your Saved Messages. Default N = ' + DEFAULT_SUMMARY_COUNT + '._'
       );
     }
   } catch (err) {
     console.error('Command error:', err);
     try {
-      const chat = await msg.getChat();
-      await chat.sendMessage('⚠️ Something went wrong handling that command.');
+      await replyPrivate(msg, '⚠️ Something went wrong handling that command.');
     } catch {
       /* ignore */
     }
@@ -155,8 +201,7 @@ client.on('message_create', async (msg) => {
 });
 
 // ---------------------------------------------------------------------------
-// Auto-reply. Fires only for INCOMING messages (the `message` event), and only
-// in chats where auto-reply has been switched on. Commands are ignored here.
+// Auto-reply. Fires only for INCOMING messages, only in opted-in chats.
 // ---------------------------------------------------------------------------
 client.on('message', async (msg) => {
   const body = (msg.body || '').trim();

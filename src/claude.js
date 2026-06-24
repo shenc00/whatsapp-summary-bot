@@ -42,18 +42,26 @@ async function summariseTranscript(transcript) {
   return textOf(message) || '(No summary produced.)';
 }
 
-async function summariseByPerson(transcript) {
-  const message = await client.messages.create({
-    model: MODEL,
-    max_tokens: 3000,
-    ...THINKING_PARAM,
-    system:
-      'You summarise WhatsApp group chats on a per-person basis. ' +
+async function summariseByPerson(transcript, personName = null) {
+  const system = personName
+    ? `You extract one person's contributions from a WhatsApp group chat transcript. ` +
+      `Focus ONLY on messages sent by "${personName}" (match case-insensitively, allow ` +
+      `partial or nickname matches). Summarise what they said, asked, or contributed in ` +
+      `2-6 concise bullet points. Only include other people's messages as brief context ` +
+      `if needed to understand "${personName}"'s point. If no messages from "${personName}" ` +
+      'are found in the transcript, say so clearly instead of guessing.'
+    : 'You summarise WhatsApp group chats on a per-person basis. ' +
       'For each person who spoke, write a short section (2-5 bullet points) ' +
       'capturing what they said, asked, or contributed. ' +
       'Use the format:\n\n*Name*\n• ...\n• ...\n\n' +
       'Order people by how much they contributed (most first). ' +
-      'Be concise and neutral. Do not invent anything not in the transcript.',
+      'Be concise and neutral. Do not invent anything not in the transcript.';
+
+  const message = await client.messages.create({
+    model: MODEL,
+    max_tokens: personName ? 1024 : 3000,
+    ...THINKING_PARAM,
+    system,
     messages: [
       {
         role: 'user',
@@ -87,6 +95,31 @@ async function summariseMeetup(transcript) {
   return textOf(message) || '(No meetup information found.)';
 }
 
+async function extractAbsurdComments(transcript) {
+  const message = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2048,
+    ...THINKING_PARAM,
+    system:
+      'You spot absurd, nonsensical, or logically ridiculous comments in a WhatsApp ' +
+      'group chat — statements that go against common sense, basic facts, or sound ' +
+      'reasoning (exaggerations, contradictions, wild claims, faulty logic). Quote ' +
+      "joke/sarcasm only if it's presented as if serious; skip obvious deliberate " +
+      'jokes that everyone is clearly in on. For each one found, give: the person\'s ' +
+      'name, a short quote or paraphrase of what they said, and a one-line note on ' +
+      'why it defies common sense. Keep the tone light and playful, not mean. ' +
+      'Format as a bulleted list: *Name*: "quote" — why it\'s absurd. ' +
+      'If nothing absurd is found in the transcript, say so plainly.',
+    messages: [
+      {
+        role: 'user',
+        content: `Here is the chat transcript (oldest to newest):\n\n${transcript}`,
+      },
+    ],
+  });
+  return textOf(message) || '(No absurd comments found.)';
+}
+
 async function ask(userMessage) {
   const message = await client.messages.create({
     model: MODEL,
@@ -101,4 +134,11 @@ async function ask(userMessage) {
   return textOf(message) || '(No reply produced.)';
 }
 
-module.exports = { summariseTranscript, summariseByPerson, summariseMeetup, ask, MODEL };
+module.exports = {
+  summariseTranscript,
+  summariseByPerson,
+  summariseMeetup,
+  extractAbsurdComments,
+  ask,
+  MODEL,
+};

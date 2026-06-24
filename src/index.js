@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const { summariseTranscript, summariseByPerson, summariseMeetup, ask, MODEL } = require('./claude');
+const { summariseTranscript, summariseByPerson, summariseMeetup, extractAbsurdComments, ask, MODEL } = require('./claude');
 
 if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
   console.error('❌ ANTHROPIC_API_KEY is missing or still the placeholder. Edit .env and paste your real key from https://console.anthropic.com/');
@@ -63,7 +63,7 @@ client.on('auth_failure', (m) => console.error('❌ Auth failure:', m));
 client.on('disconnected', (r) => console.warn('⚠️  Disconnected:', r));
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
-  console.log('   Commands: !summary · !personal · !meetup · !ai · !autoreply · !help');
+  console.log('   Commands: !summary · !personal · !meetup · !absurd · !ai · !autoreply · !help');
 });
 
 // ---------------------------------------------------------------------------
@@ -129,7 +129,15 @@ client.on('message_create', async (msg) => {
       await replyPrivate(msg, `📋 *Summary of the last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
 
     } else if (['!personal', '!whosaid'].includes(command)) {
-      const n = parseInt(rest[0], 10) || DEFAULT_SUMMARY_COUNT;
+      // !personal [N]            — breakdown for everyone
+      // !personal <name> [N]     — just that person's contributions
+      const args = [...rest];
+      let n = DEFAULT_SUMMARY_COUNT;
+      if (args.length && /^\d+$/.test(args[args.length - 1])) {
+        n = parseInt(args.pop(), 10);
+      }
+      const personName = args.length ? args.join(' ') : null;
+
       await chat.sendStateTyping();
       const messages = await chat.fetchMessages({ limit: n });
       const transcript = await buildTranscript(messages);
@@ -137,8 +145,11 @@ client.on('message_create', async (msg) => {
         await replyPrivate(msg, '_(Nothing to summarise — no recent text messages found.)_');
         return;
       }
-      const summary = await summariseByPerson(transcript);
-      await replyPrivate(msg, `👥 *Who said what — last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
+      const summary = await summariseByPerson(transcript, personName);
+      const label = personName
+        ? `👤 *${personName} — last ${messages.length} messages*`
+        : `👥 *Who said what — last ${messages.length} messages*`;
+      await replyPrivate(msg, `${label}\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
 
     } else if (command === '!meetup') {
       const n = parseInt(rest[0], 10) || DEFAULT_SUMMARY_COUNT;
@@ -151,6 +162,18 @@ client.on('message_create', async (msg) => {
       }
       const summary = await summariseMeetup(transcript);
       await replyPrivate(msg, `📅 *Meetup/outing summary — last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
+
+    } else if (['!absurd', '!ridiculous'].includes(command)) {
+      const n = parseInt(rest[0], 10) || DEFAULT_SUMMARY_COUNT;
+      await chat.sendStateTyping();
+      const messages = await chat.fetchMessages({ limit: n });
+      const transcript = await buildTranscript(messages);
+      if (!transcript) {
+        await replyPrivate(msg, '_(No messages found.)_');
+        return;
+      }
+      const summary = await extractAbsurdComments(transcript);
+      await replyPrivate(msg, `🤡 *Absurd comments — last ${messages.length} messages*\n_(from: ${chat.name || 'chat'})_\n\n${summary}`);
 
     } else if (command === '!ai') {
       const question = rest.join(' ').trim();
@@ -183,7 +206,9 @@ client.on('message_create', async (msg) => {
         '*WhatsApp Summary Bot*\n' +
           '• `!summary [N]` — overall summary of last N messages\n' +
           '• `!personal [N]` — per-person breakdown of last N messages\n' +
+          '• `!personal <name> [N]` — just that person\'s contributions\n' +
           '• `!meetup [N]` — extract meetup/outing plans from last N messages\n' +
+          '• `!absurd [N]` — flag absurd/illogical comments, with names\n' +
           '• `!ai <question>` — ask Claude anything\n' +
           '• `!autoreply on|off` — toggle auto-replies in this chat\n' +
           '• `!help` — show this message\n\n' +

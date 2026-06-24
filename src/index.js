@@ -115,7 +115,13 @@ client.on('message_create', async (msg) => {
   if (!body.startsWith('!') || !msg.fromMe) return;
 
   const selfChat = await msg.getChat();
-  if (selfChat.id._serialized !== client.info.wid._serialized) return;
+  // Detect "Message Yourself" via the contact's own isMe flag rather than
+  // comparing serialized chat IDs — WhatsApp's LID/phone-number-privacy
+  // feature can give the same chat different ID formats, so a raw
+  // string comparison against client.info.wid can silently fail to match.
+  if (selfChat.isGroup) return;
+  const selfContact = await selfChat.getContact();
+  if (!selfContact.isMe) return;
 
   try {
     const [cmd, ...rest] = body.split(/\s+/);

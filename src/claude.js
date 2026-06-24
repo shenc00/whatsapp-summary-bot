@@ -2,7 +2,10 @@
 // Uses the official Anthropic SDK. The API key is read from ANTHROPIC_API_KEY.
 const Anthropic = require('@anthropic-ai/sdk');
 
-const client = new Anthropic(); // reads ANTHROPIC_API_KEY from the environment
+// maxRetries: the SDK auto-retries with backoff on transient errors
+// (429 rate limit, 500/503/529 overloaded) — 5 gives overload spikes more
+// room to clear before we give up.
+const client = new Anthropic({ maxRetries: 5 }); // reads ANTHROPIC_API_KEY from the environment
 
 // Default to the most capable Opus model. Override with CLAUDE_MODEL in .env
 // (e.g. claude-haiku-4-5 for faster / cheaper replies).

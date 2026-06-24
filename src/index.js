@@ -216,9 +216,13 @@ client.on('message_create', async (msg) => {
       );
     }
   } catch (err) {
-    console.error('Command error:', err);
+    console.error('Command error:', err.message || err);
+    const isOverloaded = err.status === 529 || err.error?.error?.type === 'overloaded_error';
+    const userMessage = isOverloaded
+      ? '⚠️ Claude is overloaded right now — please try again in a minute.'
+      : '⚠️ Something went wrong handling that command.';
     try {
-      await replyPrivate(msg, '⚠️ Something went wrong handling that command.');
+      await replyPrivate(msg, userMessage);
     } catch {
       /* ignore */
     }

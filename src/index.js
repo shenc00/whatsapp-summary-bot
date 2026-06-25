@@ -7,6 +7,7 @@ const qrcode = require('qrcode-terminal');
 const {
   summariseTranscript,
   summariseByPerson,
+  profilePerson,
   summariseMeetup,
   extractAbsurdComments,
   ask,
@@ -71,7 +72,7 @@ client.on('auth_failure', (m) => console.error('❌ Auth failure:', m));
 client.on('disconnected', (r) => console.warn('⚠️  Disconnected:', r));
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
-  console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !meetup · !absurd · !ai · !autoreply · !help');
+  console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !meetup · !absurd · !ai · !autoreply · !help');
 });
 
 // ---------------------------------------------------------------------------
@@ -140,7 +141,7 @@ client.on('message_create', async (msg) => {
       return;
     }
 
-    const NEEDS_TARGET = ['!summary', '!summarise', '!summarize', '!personal', '!whosaid', '!meetup', '!absurd', '!ridiculous', '!autoreply'];
+    const NEEDS_TARGET = ['!summary', '!summarise', '!summarize', '!personal', '!whosaid', '!profile', '!meetup', '!absurd', '!ridiculous', '!autoreply'];
     let targetChat = null;
     let args = rest;
     if (NEEDS_TARGET.includes(command)) {
@@ -187,6 +188,33 @@ client.on('message_create', async (msg) => {
         ? `👤 *${personName} — last ${messages.length} messages*`
         : `👥 *Who said what — last ${messages.length} messages*`;
       await selfChat.sendMessage(`${label}\n_(from: ${targetChat.name || 'chat'})_\n\n${summary}`);
+
+    } else if (command === '!profile') {
+      // !profile <chat#> <name> [N] — personality/character profile from their messages
+      const a = [...args];
+      let n = DEFAULT_SUMMARY_COUNT;
+      if (a.length && /^\d+$/.test(a[a.length - 1])) {
+        n = parseInt(a.pop(), 10);
+      }
+      const personName = a.join(' ').trim();
+      if (!personName) {
+        await selfChat.sendMessage('Usage: `!profile <chat#> <name> [N]`');
+        return;
+      }
+
+      await selfChat.sendStateTyping();
+      const messages = await targetChat.fetchMessages({ limit: n });
+      const transcript = await buildTranscript(messages);
+      if (!transcript) {
+        await selfChat.sendMessage('_(Nothing to profile — no recent text messages found.)_');
+        return;
+      }
+      const profile = await profilePerson(transcript, personName);
+      await selfChat.sendMessage(
+        `🧠 *Personality profile — last ${messages.length} messages*\n_(from: ${targetChat.name || 'chat'})_\n` +
+          '_(Speculative, based only on chat text — not a real assessment.)_\n\n' +
+          profile
+      );
 
     } else if (command === '!meetup') {
       const n = parseInt(args[0], 10) || DEFAULT_SUMMARY_COUNT;
@@ -246,6 +274,7 @@ client.on('message_create', async (msg) => {
           '• `!summary <chat#> [N]` — overall summary of last N messages\n' +
           '• `!personal <chat#> [N]` — per-person breakdown\n' +
           '• `!personal <chat#> <name> [N]` — just that person\'s contributions\n' +
+          '• `!profile <chat#> <name> [N]` — speculative personality/character profile for that person\n' +
           '• `!meetup <chat#> [N]` — extract meetup/outing plans\n' +
           '• `!absurd <chat#> [N]` — flag absurd/illogical comments, with names\n' +
           '• `!ai <question>` — ask Claude anything\n' +

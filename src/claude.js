@@ -93,6 +93,37 @@ async function summariseByPerson(transcript, personName = null) {
   return textOf(message) || '(No summary produced.)';
 }
 
+async function profilePerson(transcript, personName) {
+  const message = await createWithRetry({
+    model: MODEL,
+    max_tokens: 1500,
+    ...THINKING_PARAM,
+    system:
+      `You build a lightweight personality profile for "${personName}" from their messages in a ` +
+      'WhatsApp group chat transcript. Match the name case-insensitively, allowing partial or ' +
+      'nickname matches. Base everything strictly on what they wrote and how they wrote it — ' +
+      'tone, word choice, topics they bring up, how they react to others, humor, emoji use, ' +
+      'message length/frequency, etc. Never use real-world facts about named public figures; ' +
+      'judge only the text in front of you.\n\n' +
+      'Output this format:\n\n' +
+      `*Profile: ${personName}*\n` +
+      '• Estimated age range: <e.g. "20s-30s"> — <one short clue from the text>\n' +
+      '• Personality traits: <3-5 adjectives, comma separated>\n' +
+      '• Communication style: <1-2 sentences>\n' +
+      '• Likely interests/role in the group: <1-2 sentences>\n' +
+      '• Notable quirks: <1-2 sentences, optional, omit if none>\n\n' +
+      'Be speculative but grounded — qualify guesses with words like "seems", "appears to". ' +
+      `If "${personName}" has no messages in the transcript, say so clearly instead of guessing.`,
+    messages: [
+      {
+        role: 'user',
+        content: `Here is the chat transcript (oldest to newest):\n\n${transcript}`,
+      },
+    ],
+  });
+  return textOf(message) || '(No profile produced.)';
+}
+
 async function summariseMeetup(transcript) {
   const message = await createWithRetry({
     model: MODEL,
@@ -158,6 +189,7 @@ async function ask(userMessage) {
 module.exports = {
   summariseTranscript,
   summariseByPerson,
+  profilePerson,
   summariseMeetup,
   extractAbsurdComments,
   ask,

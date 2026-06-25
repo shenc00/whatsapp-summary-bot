@@ -172,7 +172,7 @@ client.on('message_create', async (msg) => {
     }
 
     const NEEDS_TARGET = ['!summary', '!summarise', '!summarize', '!personal', '!whosaid', '!meetup', '!absurd', '!ridiculous', '!autoreply'];
-    const NEEDS_MULTI_TARGET = ['!profile', '!relationships', '!rapport'];
+    const NEEDS_MULTI_TARGET = ['!profile', '!relationship', '!relationships', '!rapport'];
     let targetChat = null;
     let targetChats = null;
     let args = rest;
@@ -256,7 +256,7 @@ client.on('message_create', async (msg) => {
           profile
       );
 
-    } else if (['!relationships', '!rapport'].includes(command)) {
+    } else if (['!relationship', '!relationships', '!rapport'].includes(command)) {
       // !relationships <chat#[,chat#,...]> [name1, name2, ...] [N]
       // Detects rapport/closeness and friction/tension between members,
       // across one or more chats (e.g. `!relationships 2,5 100`).
@@ -340,7 +340,7 @@ client.on('message_create', async (msg) => {
           '• `!personal <chat#> [N]` — per-person breakdown\n' +
           '• `!personal <chat#> <name> [N]` — just that person\'s contributions\n' +
           '• `!profile <chat#[,chat#,...]> <name> [N]` — speculative personality/character profile for that person, combined across chats\n' +
-          '• `!relationships <chat#[,chat#,...]> [name1,name2,...] [N]` — speculative rapport/friction signals between members\n' +
+          '• `!relationships <chat#[,chat#,...]> [name1,name2,...] [N]` (alias: `!rapport`) — speculative rapport/friction signals between members; names are optional, omit them to cover everyone\n' +
           '• `!meetup <chat#> [N]` — extract meetup/outing plans\n' +
           '• `!absurd <chat#> [N]` — flag absurd/illogical comments, with names\n' +
           '• `!ai <question>` — ask Claude anything\n' +
@@ -348,6 +348,8 @@ client.on('message_create', async (msg) => {
           '• `!help` — show this message\n\n' +
           '_Default N = ' + DEFAULT_SUMMARY_COUNT + '. Chat numbers come from your last `!chats`._'
       );
+    } else {
+      await selfChat.sendMessage(`Unknown command: \`${command}\`. Type \`!help\` for the list of commands.`);
     }
   } catch (err) {
     console.error('Command error:', err.message || err);

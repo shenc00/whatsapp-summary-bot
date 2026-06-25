@@ -99,12 +99,14 @@ async function profilePerson(transcript, personName) {
     max_tokens: 1500,
     ...THINKING_PARAM,
     system:
-      `You build a lightweight personality profile for "${personName}" from their messages in a ` +
-      'WhatsApp group chat transcript. Match the name case-insensitively, allowing partial or ' +
-      'nickname matches. Base everything strictly on what they wrote and how they wrote it — ' +
+      `You build a lightweight personality profile for "${personName}" from their messages, ` +
+      'pulled from one or more WhatsApp chat transcripts (each block below is labelled with ' +
+      'which chat it came from). Match the name case-insensitively, allowing partial or ' +
+      'nickname matches, and combine everything they wrote across all the labelled chats into ' +
+      'one unified profile. Base everything strictly on what they wrote and how they wrote it — ' +
       'tone, word choice, topics they bring up, how they react to others, humor, emoji use, ' +
-      'message length/frequency, etc. Never use real-world facts about named public figures; ' +
-      'judge only the text in front of you.\n\n' +
+      'message length/frequency, and whether their style shifts between chats. Never use ' +
+      'real-world facts about named public figures; judge only the text in front of you.\n\n' +
       'Output this format:\n\n' +
       `*Profile: ${personName}*\n` +
       '• Estimated age range: <e.g. "20s-30s"> — <one short clue from the text>\n' +
@@ -113,15 +115,52 @@ async function profilePerson(transcript, personName) {
       '• Likely interests/role in the group: <1-2 sentences>\n' +
       '• Notable quirks: <1-2 sentences, optional, omit if none>\n\n' +
       'Be speculative but grounded — qualify guesses with words like "seems", "appears to". ' +
-      `If "${personName}" has no messages in the transcript, say so clearly instead of guessing.`,
+      `If "${personName}" has no messages in any of the transcripts, say so clearly instead of guessing.`,
     messages: [
       {
         role: 'user',
-        content: `Here is the chat transcript (oldest to newest):\n\n${transcript}`,
+        content: `Here are the chat transcript(s) (oldest to newest within each):\n\n${transcript}`,
       },
     ],
   });
   return textOf(message) || '(No profile produced.)';
+}
+
+async function analyseRelationships(transcript, names = null) {
+  const focus = names && names.length
+    ? `Focus on these people in particular if mentioned: ${names.join(', ')}. You may still ` +
+      'report on other clear relationships you notice, but prioritise the named people.'
+    : 'Cover any people whose relationship to each other is reasonably clear from the transcript.';
+
+  const message = await createWithRetry({
+    model: MODEL,
+    max_tokens: 2000,
+    ...THINKING_PARAM,
+    system:
+      'You analyse social dynamics and relationships between members of a WhatsApp chat, based ' +
+      'purely on how they address and interact with each other in the transcript(s) below (each ' +
+      'block is labelled with which chat it came from). Look for signals like: pet names/nicknames, ' +
+      'inside jokes, frequent back-and-forth, teasing, affection, emotional support, deference, ' +
+      'flirting, terms like "babe"/"honey"/bro/sis, or — on the other end — coldness, sarcasm aimed ' +
+      'at someone, being ignored or dogpiled, repeated friction or arguments. ' +
+      `${focus}\n\n` +
+      'For each pair or group you find a signal for, output one line:\n' +
+      '• *Name A* ↔ *Name B* — <relationship guess: e.g. "close friends", "possible couple", ' +
+      '"siblings/family", "friction/tension", "one-sided", "no clear signal yet"> — <short evidence ' +
+      'quote or paraphrase backing it up>\n\n' +
+      'Group the output under two headers: "🤝 Rapport / closeness" and "⚡ Friction / distance". ' +
+      'Omit a header entirely if you find nothing for it. Be speculative and hedge appropriately ' +
+      '("seems", "appears") — this is a fun/casual read of group dynamics, not a real diagnosis. ' +
+      'Do not invent relationships with no textual evidence. If the transcript is too thin to tell ' +
+      'anything, say so plainly instead of guessing.',
+    messages: [
+      {
+        role: 'user',
+        content: `Here are the chat transcript(s) (oldest to newest within each):\n\n${transcript}`,
+      },
+    ],
+  });
+  return textOf(message) || '(No relationship signals found.)';
 }
 
 async function summariseMeetup(transcript) {
@@ -190,6 +229,7 @@ module.exports = {
   summariseTranscript,
   summariseByPerson,
   profilePerson,
+  analyseRelationships,
   summariseMeetup,
   extractAbsurdComments,
   ask,

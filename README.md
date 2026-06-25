@@ -12,7 +12,8 @@ It links to your existing WhatsApp account through the same **"Linked Devices"**
 | `!summary <chat#> [N]` | Summarises the last `N` messages in that chat (default 50) |
 | `!personal <chat#> [N]` | Per-person breakdown of who said what |
 | `!personal <chat#> <name> [N]` | Summarises just that one person's contributions |
-| `!profile <chat#> <name> [N]` | Speculative personality/character profile for that person (age range, traits, style) based on their messages |
+| `!profile <chat#[,chat#,...]> <name> [N]` | Speculative personality/character profile for that person (age range, traits, style), combined across one or more chats they're in |
+| `!relationships <chat#[,chat#,...]> [name1,name2,...] [N]` | Speculative rapport/closeness and friction/tension signals between members, across one or more chats |
 | `!meetup <chat#> [N]` | Extracts meet-up/outing plans (dates, venues, who's in/out) |
 | `!absurd <chat#> [N]` | Flags absurd or illogical comments, naming who said them |
 | `!ai <question>` | Asks Claude a one-off question (no chat needed) |
@@ -92,6 +93,9 @@ Open your own **Saved Messages** chat (search "You" in WhatsApp, or message your
 !personal 2 100              → per-person breakdown of the last 100 messages
 !personal 2 Alice 100        → just Alice's contributions from the last 100 messages
 !profile 2 Alice 100         → speculative personality profile for Alice from the last 100 messages
+!profile 2,5 Alice 100        → same, but combining Alice's messages from chats #2 and #5
+!relationships 2 100          → rapport/friction signals between members of chat #2
+!relationships 2,5 Alice,Bob 100 → same, focused on Alice and Bob, across chats #2 and #5
 !meetup 2 100                → meet-up/outing plans pulled from the last 100 messages
 !absurd 2 100                → absurd/illogical comments, with names, from the last 100 messages
 !ai what's the weather like to discuss?

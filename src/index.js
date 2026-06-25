@@ -8,6 +8,7 @@ const {
   summariseTranscript,
   summariseByPerson,
   profilePerson,
+  analyseRelationships,
   summariseMeetup,
   extractAbsurdComments,
   ask,
@@ -72,7 +73,7 @@ client.on('auth_failure', (m) => console.error('❌ Auth failure:', m));
 client.on('disconnected', (r) => console.warn('⚠️  Disconnected:', r));
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
-  console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !meetup · !absurd · !ai · !autoreply · !help');
+  console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !relationships · !meetup · !absurd · !ai · !autoreply · !help');
 });
 
 // ---------------------------------------------------------------------------
@@ -97,6 +98,35 @@ async function buildTranscript(messages) {
     lines.push(`${name}: ${m.body}`);
   }
   return lines.join('\n');
+}
+
+// Parses "2,5,7" (or just "2") into chat objects from lastChatList.
+// Returns null (and sends a usage message) if any number is invalid.
+async function resolveChats(spec) {
+  const indices = spec.split(',').map((s) => parseInt(s.trim(), 10));
+  const chats = [];
+  for (const idx of indices) {
+    if (!idx || idx < 1 || idx > lastChatList.length) return null;
+    chats.push(lastChatList[idx - 1]);
+  }
+  return chats;
+}
+
+// Fetches + builds a transcript per chat, each labelled with the chat name,
+// and concatenates them. Returns { combined, perChatCounts } where
+// perChatCounts is [{ name, count }] for the reply label.
+async function buildMultiChatTranscript(chats, n) {
+  const blocks = [];
+  const perChatCounts = [];
+  for (const chat of chats) {
+    const messages = await chat.fetchMessages({ limit: n });
+    const transcript = await buildTranscript(messages);
+    perChatCounts.push({ name: chat.name || chat.id.user, count: messages.length });
+    if (transcript) {
+      blocks.push(`--- Chat: ${chat.name || chat.id.user} ---\n${transcript}`);
+    }
+  }
+  return { combined: blocks.join('\n\n'), perChatCounts };
 }
 
 function overloadOrGenericMessage(err) {
@@ -141,8 +171,10 @@ client.on('message_create', async (msg) => {
       return;
     }
 
-    const NEEDS_TARGET = ['!summary', '!summarise', '!summarize', '!personal', '!whosaid', '!profile', '!meetup', '!absurd', '!ridiculous', '!autoreply'];
+    const NEEDS_TARGET = ['!summary', '!summarise', '!summarize', '!personal', '!whosaid', '!meetup', '!absurd', '!ridiculous', '!autoreply'];
+    const NEEDS_MULTI_TARGET = ['!profile', '!relationships', '!rapport'];
     let targetChat = null;
+    let targetChats = null;
     let args = rest;
     if (NEEDS_TARGET.includes(command)) {
       const idx = parseInt(rest[0], 10);
@@ -151,6 +183,13 @@ client.on('message_create', async (msg) => {
         return;
       }
       targetChat = lastChatList[idx - 1];
+      args = rest.slice(1);
+    } else if (NEEDS_MULTI_TARGET.includes(command)) {
+      targetChats = await resolveChats(rest[0] || '');
+      if (!targetChats) {
+        await selfChat.sendMessage('Run `!chats [filter]` first, then use the listed number(s), e.g. `!profile 2,5 Alice 100`.');
+        return;
+      }
       args = rest.slice(1);
     }
 
@@ -190,7 +229,8 @@ client.on('message_create', async (msg) => {
       await selfChat.sendMessage(`${label}\n_(from: ${targetChat.name || 'chat'})_\n\n${summary}`);
 
     } else if (command === '!profile') {
-      // !profile <chat#> <name> [N] — personality/character profile from their messages
+      // !profile <chat#[,chat#,...]> <name> [N] — personality/character profile,
+      // combined across all listed chats (e.g. `!profile 2,5 Alice 100`)
       const a = [...args];
       let n = DEFAULT_SUMMARY_COUNT;
       if (a.length && /^\d+$/.test(a[a.length - 1])) {
@@ -198,22 +238,47 @@ client.on('message_create', async (msg) => {
       }
       const personName = a.join(' ').trim();
       if (!personName) {
-        await selfChat.sendMessage('Usage: `!profile <chat#> <name> [N]`');
+        await selfChat.sendMessage('Usage: `!profile <chat#[,chat#,...]> <name> [N]`');
         return;
       }
 
       await selfChat.sendStateTyping();
-      const messages = await targetChat.fetchMessages({ limit: n });
-      const transcript = await buildTranscript(messages);
-      if (!transcript) {
+      const { combined, perChatCounts } = await buildMultiChatTranscript(targetChats, n);
+      if (!combined) {
         await selfChat.sendMessage('_(Nothing to profile — no recent text messages found.)_');
         return;
       }
-      const profile = await profilePerson(transcript, personName);
+      const profile = await profilePerson(combined, personName);
+      const sourceLine = perChatCounts.map((c) => `${c.name} (${c.count})`).join(', ');
       await selfChat.sendMessage(
-        `🧠 *Personality profile — last ${messages.length} messages*\n_(from: ${targetChat.name || 'chat'})_\n` +
+        `🧠 *Personality profile*\n_(from: ${sourceLine})_\n` +
           '_(Speculative, based only on chat text — not a real assessment.)_\n\n' +
           profile
+      );
+
+    } else if (['!relationships', '!rapport'].includes(command)) {
+      // !relationships <chat#[,chat#,...]> [name1, name2, ...] [N]
+      // Detects rapport/closeness and friction/tension between members,
+      // across one or more chats (e.g. `!relationships 2,5 100`).
+      const a = [...args];
+      let n = DEFAULT_SUMMARY_COUNT;
+      if (a.length && /^\d+$/.test(a[a.length - 1])) {
+        n = parseInt(a.pop(), 10);
+      }
+      const names = a.join(' ').split(',').map((s) => s.trim()).filter(Boolean);
+
+      await selfChat.sendStateTyping();
+      const { combined, perChatCounts } = await buildMultiChatTranscript(targetChats, n);
+      if (!combined) {
+        await selfChat.sendMessage('_(Nothing to analyse — no recent text messages found.)_');
+        return;
+      }
+      const analysis = await analyseRelationships(combined, names.length ? names : null);
+      const sourceLine = perChatCounts.map((c) => `${c.name} (${c.count})`).join(', ');
+      await selfChat.sendMessage(
+        `🔗 *Relationship signals*\n_(from: ${sourceLine})_\n` +
+          '_(Speculative read of group dynamics — not a real assessment.)_\n\n' +
+          analysis
       );
 
     } else if (command === '!meetup') {
@@ -274,7 +339,8 @@ client.on('message_create', async (msg) => {
           '• `!summary <chat#> [N]` — overall summary of last N messages\n' +
           '• `!personal <chat#> [N]` — per-person breakdown\n' +
           '• `!personal <chat#> <name> [N]` — just that person\'s contributions\n' +
-          '• `!profile <chat#> <name> [N]` — speculative personality/character profile for that person\n' +
+          '• `!profile <chat#[,chat#,...]> <name> [N]` — speculative personality/character profile for that person, combined across chats\n' +
+          '• `!relationships <chat#[,chat#,...]> [name1,name2,...] [N]` — speculative rapport/friction signals between members\n' +
           '• `!meetup <chat#> [N]` — extract meetup/outing plans\n' +
           '• `!absurd <chat#> [N]` — flag absurd/illogical comments, with names\n' +
           '• `!ai <question>` — ask Claude anything\n' +

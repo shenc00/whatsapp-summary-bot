@@ -96,7 +96,7 @@ async function summariseByPerson(transcript, personName = null) {
 async function profilePerson(transcript, personName) {
   const message = await createWithRetry({
     model: MODEL,
-    max_tokens: 1500,
+    max_tokens: 2000,
     ...THINKING_PARAM,
     system:
       `You build a lightweight personality profile for "${personName}" from their messages, ` +
@@ -113,8 +113,14 @@ async function profilePerson(transcript, personName) {
       '• Personality traits: <3-5 adjectives, comma separated>\n' +
       '• Communication style: <1-2 sentences>\n' +
       '• Likely interests/role in the group: <1-2 sentences>\n' +
-      '• Notable quirks: <1-2 sentences, optional, omit if none>\n\n' +
-      'Be speculative but grounded — qualify guesses with words like "seems", "appears to". ' +
+      '• Notable quirks: <1-2 sentences, optional, omit if none>\n' +
+      '• Estimated MBTI type: <4-letter code like INTJ, ESFP, etc.> — <2-3 sentences explaining reasoning>\n\n' +
+      'For the MBTI deduction, look for patterns in:\n' +
+      '  - Introversion/Extraversion: social energy (frequent engagement, group banter vs. observing, few words)\n' +
+      '  - Sensing/Intuition: focus on concrete details and facts vs. big-picture ideas and possibilities\n' +
+      '  - Thinking/Feeling: logical analysis and directness vs. emotion, empathy, and concern for group harmony\n' +
+      '  - Judging/Perceiving: preference for structure and decisiveness vs. flexibility and spontaneity\n\n' +
+      'Be speculative but grounded — qualify guesses with words like "seems", "appears to", "possibly". ' +
       `If "${personName}" has no messages in any of the transcripts, say so clearly instead of guessing.`,
     messages: [
       {

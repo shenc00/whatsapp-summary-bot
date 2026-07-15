@@ -50,6 +50,18 @@ const client = new Client({
     executablePath: process.env.CHROME_PATH || undefined,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
   },
+  // Pin to a specific WhatsApp Web build via WA_WEB_VERSION in .env (e.g.
+  // "2.3000.1043180520-alpha") when the latest live version breaks
+  // whatsapp-web.js internals (see wwebjs/whatsapp-web.js#201838).
+  ...(process.env.WA_WEB_VERSION
+    ? {
+        webVersion: process.env.WA_WEB_VERSION,
+        webVersionCache: {
+          type: 'remote',
+          remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/{version}.html',
+        },
+      }
+    : {}),
 });
 
 let pairingRequested = false;

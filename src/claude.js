@@ -217,6 +217,37 @@ async function extractAbsurdComments(transcript) {
   return textOf(message) || '(No absurd comments found.)';
 }
 
+async function draftReply(contextTranscript, targetMessage, tone = null) {
+  const toneLine = tone
+    ? `Write in a ${tone} tone.`
+    : 'Pick a natural tone that fits the message and conversation.';
+
+  const message = await createWithRetry({
+    model: MODEL,
+    max_tokens: 300,
+    ...THINKING_PARAM,
+    system:
+      'You draft a reply to a specific WhatsApp message on behalf of the user, using the ' +
+      'surrounding conversation only as context for what is going on. Write like a real ' +
+      'person quickly typing a text on their phone: contractions, plain punctuation, no ' +
+      'corporate or AI phrasing. Never use em dashes. Never say things like "I hope this ' +
+      'helps", "Certainly!", "Of course!", or other assistant-speak. Skip hedging, filler ' +
+      '("in order to", "at this point in time"), and forced lists of three. Keep it short — ' +
+      `one to three sentences, like an actual text, not an essay. ${toneLine} Output ONLY the ` +
+      'reply text itself, with no preamble, no quotes around it, and no explanation.',
+    messages: [
+      {
+        role: 'user',
+        content:
+          `Conversation so far, oldest to newest (context only):\n${contextTranscript || '(no prior context)'}\n\n` +
+          `Message to reply to:\n"${targetMessage}"\n\n` +
+          'Draft a reply.',
+      },
+    ],
+  });
+  return textOf(message) || '(No reply produced.)';
+}
+
 async function ask(userMessage) {
   const message = await createWithRetry({
     model: MODEL,
@@ -238,6 +269,7 @@ module.exports = {
   analyseRelationships,
   summariseMeetup,
   extractAbsurdComments,
+  draftReply,
   ask,
   isOverloaded,
   MODEL,

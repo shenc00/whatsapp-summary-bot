@@ -16,6 +16,8 @@ It links to your existing WhatsApp account through the same **"Linked Devices"**
 | `!relationships <chat#[,chat#,...]> [name1,name2,...] [N]` | Speculative rapport/closeness and friction/tension signals between members, across one or more chats |
 | `!meetup <chat#> [N]` | Extracts meet-up/outing plans (dates, venues, who's in/out) |
 | `!absurd <chat#> [N]` | Flags absurd or illogical comments, naming who said them |
+| `!reply <chat#> [tone]` | Drafts a reply to the last incoming message in that chat |
+| `!reply <chat#> <pasted message> [tone]` | Drafts a reply to that specific message instead (tones: casual, formal, funny, firm, warm, blunt, apologetic, assertive, playful, professional) |
 | `!ai <question>` | Asks Claude a one-off question (no chat needed) |
 | `!autoreply <chat#> on` / `off` | Turns automatic replies on/off **for that chat** |
 | `!help` | Lists the commands |
@@ -98,6 +100,9 @@ Open your own **Saved Messages** chat (search "You" in WhatsApp, or message your
 !relationships 2,5 Alice,Bob 100 → same, focused on Alice and Bob, across chats #2 and #5
 !meetup 2 100                → meet-up/outing plans pulled from the last 100 messages
 !absurd 2 100                → absurd/illogical comments, with names, from the last 100 messages
+!reply 2                     → draft a reply to the last incoming message in chat #2
+!reply 2 casual               → same, in a casual tone
+!reply 2 Sorry can't make it tonight, formal → draft a reply to that pasted message, formal tone
 !ai what's the weather like to discuss?
 !autoreply 2 on              → Claude now replies to incoming messages in chat #2
 !autoreply 2 off             → stop auto-replying

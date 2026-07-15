@@ -11,10 +11,14 @@ const {
   analyseRelationships,
   summariseMeetup,
   extractAbsurdComments,
+  draftReply,
   ask,
   isOverloaded,
   MODEL,
 } = require('./claude');
+
+const REPLY_TONES = ['casual', 'formal', 'funny', 'firm', 'warm', 'blunt', 'apologetic', 'assertive', 'playful', 'professional'];
+const REPLY_CONTEXT_COUNT = 10;
 
 if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
   console.error('❌ ANTHROPIC_API_KEY is missing or still the placeholder. Edit .env and paste your real key from https://console.anthropic.com/');
@@ -171,7 +175,7 @@ client.on('message_create', async (msg) => {
       return;
     }
 
-    const NEEDS_TARGET = ['!summary', '!summarise', '!summarize', '!personal', '!whosaid', '!meetup', '!absurd', '!ridiculous', '!autoreply'];
+    const NEEDS_TARGET = ['!summary', '!summarise', '!summarize', '!personal', '!whosaid', '!meetup', '!absurd', '!ridiculous', '!autoreply', '!reply'];
     const NEEDS_MULTI_TARGET = ['!profile', '!relationship', '!relationships', '!rapport'];
     let targetChat = null;
     let targetChats = null;
@@ -330,6 +334,33 @@ client.on('message_create', async (msg) => {
         await selfChat.sendMessage('Usage: !autoreply <chat#> on | off');
       }
 
+    } else if (command === '!reply') {
+      const a = [...args];
+      let tone = null;
+      if (a.length && REPLY_TONES.includes(a[a.length - 1].toLowerCase())) {
+        tone = a.pop().toLowerCase();
+      }
+      const pastedText = a.join(' ').trim();
+
+      await selfChat.sendStateTyping();
+      const messages = await targetChat.fetchMessages({ limit: REPLY_CONTEXT_COUNT });
+      const contextTranscript = await buildTranscript(messages);
+
+      let targetMessage = pastedText;
+      if (!targetMessage) {
+        const lastIncoming = [...messages].reverse().find((m) => !m.fromMe && m.body);
+        if (!lastIncoming) {
+          await selfChat.sendMessage(
+            `_(No incoming message found in the last ${REPLY_CONTEXT_COUNT} messages of that chat — paste the message text instead: \`!reply <chat#> <message>\`.)_`
+          );
+          return;
+        }
+        targetMessage = lastIncoming.body;
+      }
+
+      const draft = await draftReply(contextTranscript, targetMessage, tone);
+      await selfChat.sendMessage(`✍️ *Suggested reply*\n_(to: ${targetChat.name || 'chat'})_\n\n${draft}`);
+
     } else if (command === '!help') {
       await selfChat.sendMessage(
         '*WhatsApp Summary Bot*\n' +
@@ -343,6 +374,9 @@ client.on('message_create', async (msg) => {
           '• `!relationships <chat#[,chat#,...]> [name1,name2,...] [N]` (alias: `!rapport`) — speculative rapport/friction signals between members; names are optional, omit them to cover everyone\n' +
           '• `!meetup <chat#> [N]` — extract meetup/outing plans\n' +
           '• `!absurd <chat#> [N]` — flag absurd/illogical comments, with names\n' +
+          '• `!reply <chat#> [tone]` — draft a reply to the last incoming message in that chat\n' +
+          '• `!reply <chat#> <pasted message> [tone]` — draft a reply to that specific message instead\n' +
+          `  _(tones: ${REPLY_TONES.join(', ')})_\n` +
           '• `!ai <question>` — ask Claude anything\n' +
           '• `!autoreply <chat#> on|off` — toggle auto-replies in a chat\n' +
           '• `!help` — show this message\n\n' +

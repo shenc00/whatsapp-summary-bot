@@ -217,24 +217,59 @@ async function extractAbsurdComments(transcript) {
   return textOf(message) || '(No absurd comments found.)';
 }
 
-async function draftReply(contextTranscript, targetMessage, tone = null) {
-  const toneLine = tone
-    ? `Write in a ${tone} tone.`
-    : 'Pick a natural tone that fits the message and conversation.';
+// Shared humanizing style rules for anything drafted/sent on the user's
+// behalf — kills the usual AI tells instead of pulling in a third-party
+// "humanizer" package (those are either paid detector-evasion APIs that ship
+// your chats to a stranger's server, or unrelated string-formatting libs).
+const HUMAN_STYLE =
+  'Write like a real person quickly typing a text on their phone: contractions, plain ' +
+  'punctuation, no corporate or AI phrasing. Never use em dashes. Never say things like ' +
+  '"I hope this helps", "Certainly!", "Of course!", or other assistant-speak. Skip hedging, ' +
+  'filler ("in order to", "at this point in time"), and forced lists of three. Keep it short ' +
+  '— one to three sentences, like an actual text, not an essay.';
 
+// Sentinel the model outputs in 'discussion' tone when a message doesn't
+// warrant a reply. Checked verbatim in autoReplyMessage() below.
+const NO_REPLY_SENTINEL = 'NO_REPLY_NEEDED';
+
+function toneInstruction(tone) {
+  if (!tone) return 'Pick a natural tone that fits the message and conversation.';
+  if (tone === 'scam') {
+    return (
+      'The other person messaging is a suspected scammer. Play along as a naive, slightly ' +
+      'confused, trusting target to waste their time and string them along — sound ' +
+      'hopeful/excited/convinced, ask lots of clarifying questions, stall, and never sound ' +
+      'suspicious. NEVER reveal or invent real personal, financial, banking, ID, OTP, ' +
+      'password, or address information, even if asked directly — deflect with more ' +
+      'stalling questions or a fake technical problem ("my banking app is glitching") ' +
+      'instead. This is scambaiting aimed at the scammer, not real information disclosure.'
+    );
+  }
+  if (tone === 'discussion') {
+    return (
+      'This is a resident committee / community group chat. You participate on behalf of ' +
+      'the user, but only when it truly adds value — most messages should get NO reply. ' +
+      'Only respond to significant messages: proposals, decisions, complaints, disputes, ' +
+      'or direct questions that need input. Skip small talk, acknowledgements, emoji ' +
+      "reactions, or anything already adequately addressed by someone else. When you do " +
+      'reply, be professional and logical, and reason from what is best for the community ' +
+      `as a whole, not personal convenience. If this message does not warrant a reply, ` +
+      `output exactly ${NO_REPLY_SENTINEL} and nothing else — no punctuation, no explanation.`
+    );
+  }
+  return `Write in a ${tone} tone.`;
+}
+
+async function draftReply(contextTranscript, targetMessage, tone = null) {
   const message = await createWithRetry({
     model: MODEL,
     max_tokens: 300,
     ...THINKING_PARAM,
     system:
       'You draft a reply to a specific WhatsApp message on behalf of the user, using the ' +
-      'surrounding conversation only as context for what is going on. Write like a real ' +
-      'person quickly typing a text on their phone: contractions, plain punctuation, no ' +
-      'corporate or AI phrasing. Never use em dashes. Never say things like "I hope this ' +
-      'helps", "Certainly!", "Of course!", or other assistant-speak. Skip hedging, filler ' +
-      '("in order to", "at this point in time"), and forced lists of three. Keep it short — ' +
-      `one to three sentences, like an actual text, not an essay. ${toneLine} Output ONLY the ` +
-      'reply text itself, with no preamble, no quotes around it, and no explanation.',
+      'surrounding conversation only as context for what is going on. ' +
+      `${HUMAN_STYLE} ${toneInstruction(tone)} Output ONLY the reply text itself, with no ` +
+      'preamble, no quotes around it, and no explanation.',
     messages: [
       {
         role: 'user',
@@ -246,6 +281,34 @@ async function draftReply(contextTranscript, targetMessage, tone = null) {
     ],
   });
   return textOf(message) || '(No reply produced.)';
+}
+
+// Like draftReply, but for live, unattended auto-reply: sent straight to the
+// chat with no review step, so the humanizing + tone/scam guardrails matter
+// even more here than in the drafted-for-review path.
+async function autoReplyMessage(contextTranscript, incomingMessage, tone = null) {
+  const message = await createWithRetry({
+    model: MODEL,
+    max_tokens: 300,
+    ...THINKING_PARAM,
+    system:
+      'You are auto-replying to an incoming WhatsApp message on behalf of the user, in real ' +
+      'time, using the recent conversation only as context. ' +
+      `${HUMAN_STYLE} ${toneInstruction(tone)} Output ONLY the reply text itself, with no ` +
+      'preamble, no quotes, and no explanation.',
+    messages: [
+      {
+        role: 'user',
+        content:
+          `Recent conversation, oldest to newest (context only):\n${contextTranscript || '(no prior context)'}\n\n` +
+          `New incoming message to reply to:\n"${incomingMessage}"`,
+      },
+    ],
+  });
+  const text = textOf(message).trim();
+  // 'discussion' tone: model opts out of replying to this specific message.
+  if (tone === 'discussion' && text.toUpperCase() === NO_REPLY_SENTINEL) return null;
+  return text || '(No reply produced.)';
 }
 
 async function ask(userMessage) {
@@ -270,6 +333,7 @@ module.exports = {
   summariseMeetup,
   extractAbsurdComments,
   draftReply,
+  autoReplyMessage,
   ask,
   isOverloaded,
   MODEL,

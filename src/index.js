@@ -12,13 +12,19 @@ const {
   summariseMeetup,
   extractAbsurdComments,
   draftReply,
+  autoReplyMessage,
   ask,
   isOverloaded,
   MODEL,
 } = require('./claude');
 
-const REPLY_TONES = ['casual', 'formal', 'funny', 'firm', 'warm', 'blunt', 'apologetic', 'assertive', 'playful', 'professional'];
+// 'scam' and 'discussion' are special modes (see claude.js toneInstruction),
+// not just a tone of voice — 'scam' scambaits an incoming scammer, keeping
+// never real personal/financial info; 'discussion' only replies to
+// significant messages in a group (see !autoreply help).
+const REPLY_TONES = ['casual', 'formal', 'funny', 'firm', 'warm', 'blunt', 'apologetic', 'assertive', 'playful', 'professional', 'scam', 'discussion'];
 const REPLY_CONTEXT_COUNT = 10;
+const CHATS_LIST_LIMIT = 10;
 
 if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
   console.error('❌ ANTHROPIC_API_KEY is missing or still the placeholder. Edit .env and paste your real key from https://console.anthropic.com/');
@@ -29,9 +35,13 @@ if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('..
 // Persisted state: which chats have auto-reply switched on.
 // ---------------------------------------------------------------------------
 const STATE_FILE = path.join(__dirname, '..', 'autoreply.json');
-let autoReplyChats = new Set();
+// chatId -> tone (null = no specific tone/mode).
+let autoReplyChats = new Map();
 try {
-  autoReplyChats = new Set(JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')));
+  const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  // Migrate the old format (plain array of chat ids, no tone) transparently.
+  const entries = Array.isArray(raw) ? raw.map((v) => (Array.isArray(v) ? v : [v, null])) : Object.entries(raw);
+  autoReplyChats = new Map(entries);
 } catch {
   /* no state file yet — start empty */
 }
@@ -99,6 +109,32 @@ client.on('ready', () => {
 // ---------------------------------------------------------------------------
 let lastChatList = [];
 
+// Splits a command's remaining args into { ref, rest }. `ref` is normally
+// just the first token (a chat# from the last `!chats`), but a quoted name
+// (`"Family Trip" 50`) is read as one ref so multi-word chat/group names
+// work too — needed since !chats now only lists the first CHATS_LIST_LIMIT.
+function splitRef(rest) {
+  const joined = rest.join(' ');
+  const quoted = joined.match(/^"([^"]+)"\s*(.*)$/);
+  if (quoted) return { ref: quoted[1], rest: quoted[2] ? quoted[2].split(/\s+/) : [] };
+  return { ref: rest[0] || '', rest: rest.slice(1) };
+}
+
+// Resolves one ref (chat# from lastChatList, or a chat/contact name — quote
+// it if it has spaces) to a live Chat object. Null if not found/ambiguous.
+async function resolveChatRef(ref) {
+  if (/^\d+$/.test(ref)) {
+    const idx = parseInt(ref, 10);
+    return idx >= 1 && idx <= lastChatList.length ? lastChatList[idx - 1] : null;
+  }
+  const chats = await client.getChats();
+  const lower = ref.toLowerCase();
+  const exact = chats.find((c) => (c.name || '').toLowerCase() === lower);
+  if (exact) return exact;
+  const matches = chats.filter((c) => (c.name || '').toLowerCase().includes(lower));
+  return matches.length === 1 ? matches[0] : null;
+}
+
 // Build a "Name: message" transcript from a list of wwebjs messages.
 async function buildTranscript(messages) {
   const lines = [];
@@ -116,14 +152,18 @@ async function buildTranscript(messages) {
   return lines.join('\n');
 }
 
-// Parses "2,5,7" (or just "2") into chat objects from lastChatList.
-// Returns null (and sends a usage message) if any number is invalid.
+// Parses "2,5,7" or "2,Family Trip" into chat objects (numbers index into
+// lastChatList, anything else is looked up by name via resolveChatRef).
+// Names with commas in them aren't supported — use the chat# instead.
+// Returns null if any token doesn't resolve to exactly one chat.
 async function resolveChats(spec) {
-  const indices = spec.split(',').map((s) => parseInt(s.trim(), 10));
+  const tokens = spec.split(',').map((s) => s.trim().replace(/^"|"$/g, ''));
   const chats = [];
-  for (const idx of indices) {
-    if (!idx || idx < 1 || idx > lastChatList.length) return null;
-    chats.push(lastChatList[idx - 1]);
+  for (const token of tokens) {
+    if (!token) return null;
+    const chat = await resolveChatRef(token);
+    if (!chat) return null;
+    chats.push(chat);
   }
   return chats;
 }
@@ -177,13 +217,21 @@ client.on('message_create', async (msg) => {
     if (command === '!chats') {
       const filter = rest.join(' ').trim().toLowerCase();
       const chats = await client.getChats();
-      lastChatList = (filter ? chats.filter((c) => (c.name || '').toLowerCase().includes(filter)) : chats).slice(0, 30);
+      const matching = filter ? chats.filter((c) => (c.name || '').toLowerCase().includes(filter)) : chats;
+      lastChatList = matching.slice(0, CHATS_LIST_LIMIT);
       if (!lastChatList.length) {
         await selfChat.sendMessage('_(No matching chats found.)_');
         return;
       }
       const lines = lastChatList.map((c, i) => `${i + 1}. ${c.name || c.id.user}${c.isGroup ? ' (group)' : ''}`);
-      await selfChat.sendMessage('*Chats* — use the number in other commands, e.g. `!summary 2 100`:\n\n' + lines.join('\n'));
+      const more = matching.length > CHATS_LIST_LIMIT
+        ? `\n\n_(${matching.length - CHATS_LIST_LIMIT} more not shown — filter with \`!chats <filter>\`, or reference ` +
+          'those directly by name in other commands, e.g. `!summary "Family Trip" 100`.)_'
+        : '';
+      await selfChat.sendMessage(
+        '*Chats* — use the number below, or the chat/contact name directly (quote it if it has ' +
+        'spaces), e.g. `!summary 2 100` or `!summary "Family Trip" 100`:\n\n' + lines.join('\n') + more
+      );
       return;
     }
 
@@ -193,13 +241,16 @@ client.on('message_create', async (msg) => {
     let targetChats = null;
     let args = rest;
     if (NEEDS_TARGET.includes(command)) {
-      const idx = parseInt(rest[0], 10);
-      if (!idx || idx < 1 || idx > lastChatList.length) {
-        await selfChat.sendMessage('Run `!chats [filter]` first, then use the listed number, e.g. `!summary 2 100`.');
+      const { ref, rest: remaining } = splitRef(rest);
+      targetChat = ref ? await resolveChatRef(ref) : null;
+      if (!targetChat) {
+        await selfChat.sendMessage(
+          'Run `!chats [filter]` first, then use the listed number, or the chat/contact name ' +
+          '(quote it if it has spaces), e.g. `!summary 2 100` or `!summary "Family Trip" 100`.'
+        );
         return;
       }
-      targetChat = lastChatList[idx - 1];
-      args = rest.slice(1);
+      args = remaining;
     } else if (NEEDS_MULTI_TARGET.includes(command)) {
       targetChats = await resolveChats(rest[0] || '');
       if (!targetChats) {
@@ -335,15 +386,22 @@ client.on('message_create', async (msg) => {
       const arg = (args[0] || '').toLowerCase();
       const id = targetChat.id._serialized;
       if (arg === 'on') {
-        autoReplyChats.add(id);
+        const tone = (args[1] || '').toLowerCase();
+        if (tone && !REPLY_TONES.includes(tone)) {
+          await selfChat.sendMessage(`Unknown tone \`${tone}\`. Options: ${REPLY_TONES.join(', ')}.`);
+          return;
+        }
+        autoReplyChats.set(id, tone || null);
         saveState();
-        await selfChat.sendMessage(`🤖 Auto-reply *enabled* for: ${targetChat.name || 'this chat'}`);
+        await selfChat.sendMessage(
+          `🤖 Auto-reply *enabled* for: ${targetChat.name || 'this chat'}` + (tone ? ` _(mode: ${tone})_` : '')
+        );
       } else if (arg === 'off') {
         autoReplyChats.delete(id);
         saveState();
         await selfChat.sendMessage(`🤖 Auto-reply *disabled* for: ${targetChat.name || 'this chat'}`);
       } else {
-        await selfChat.sendMessage('Usage: !autoreply <chat#> on | off');
+        await selfChat.sendMessage('Usage: `!autoreply <chat#|name> on [tone] | off` — tones: ' + REPLY_TONES.join(', '));
       }
 
     } else if (command === '!reply') {
@@ -390,9 +448,13 @@ client.on('message_create', async (msg) => {
           '• `!reply <chat#> <pasted message> [tone]` — draft a reply to that specific message instead\n' +
           `  _(tones: ${REPLY_TONES.join(', ')})_\n` +
           '• `!ai <question>` — ask Claude anything\n' +
-          '• `!autoreply <chat#> on|off` — toggle auto-replies in a chat\n' +
+          '• `!autoreply <chat#|name> on [tone] | off` — toggle live auto-replies in a chat\n' +
+          '  _(`scam` tone: scambaits a suspected scammer, never reveals real personal/financial info.\n' +
+          '  `discussion` tone: for a group — only replies to significant messages, professional/logical, community-minded.)_\n' +
           '• `!help` — show this message\n\n' +
-          '_Default N = ' + DEFAULT_SUMMARY_COUNT + '. Chat numbers come from your last `!chats`._'
+          '_Default N = ' + DEFAULT_SUMMARY_COUNT + '. `!chats` lists the first ' + CHATS_LIST_LIMIT +
+          ' — beyond that, or for anything not listed, use the chat/contact name directly ' +
+          '(quote it if it has spaces) instead of a number.'
       );
     } else {
       await selfChat.sendMessage(`Unknown command: \`${command}\`. Type \`!help\` for the list of commands.`);
@@ -416,9 +478,15 @@ client.on('message', async (msg) => {
 
   try {
     const chat = await msg.getChat();
-    if (!autoReplyChats.has(chat.id._serialized)) return;
+    const id = chat.id._serialized;
+    if (!autoReplyChats.has(id)) return;
+    const tone = autoReplyChats.get(id);
+    const recent = await chat.fetchMessages({ limit: REPLY_CONTEXT_COUNT });
+    const contextTranscript = await buildTranscript(recent);
+    const reply = await autoReplyMessage(contextTranscript, body, tone);
+    if (!reply) return; // 'discussion' mode: message wasn't significant enough to reply to
     await chat.sendStateTyping();
-    await chat.sendMessage(await ask(body));
+    await chat.sendMessage(reply);
   } catch (err) {
     console.error('Auto-reply error:', err);
   }

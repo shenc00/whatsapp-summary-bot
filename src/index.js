@@ -24,6 +24,7 @@ const {
 // significant messages in a group (see !autoreply help).
 const REPLY_TONES = ['casual', 'formal', 'funny', 'firm', 'warm', 'blunt', 'apologetic', 'assertive', 'playful', 'professional', 'scam', 'discussion'];
 const REPLY_CONTEXT_COUNT = 10;
+const AUTOREPLY_CONTEXT_COUNT = 20; // live autoreply looks further back than manual !reply
 const CHATS_LIST_LIMIT = 10;
 
 if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
@@ -481,7 +482,7 @@ client.on('message', async (msg) => {
     const id = chat.id._serialized;
     if (!autoReplyChats.has(id)) return;
     const tone = autoReplyChats.get(id);
-    const recent = await chat.fetchMessages({ limit: REPLY_CONTEXT_COUNT });
+    const recent = await chat.fetchMessages({ limit: AUTOREPLY_CONTEXT_COUNT });
     const contextTranscript = await buildTranscript(recent);
     const reply = await autoReplyMessage(contextTranscript, body, tone);
     if (!reply) return; // 'discussion' mode: message wasn't significant enough to reply to

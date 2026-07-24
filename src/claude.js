@@ -248,13 +248,16 @@ function toneInstruction(tone) {
   if (tone === 'discussion') {
     return (
       'This is a resident committee / community group chat. You participate on behalf of ' +
-      'the user, but only when it truly adds value — most messages should get NO reply. ' +
-      'Only respond to significant messages: proposals, decisions, complaints, disputes, ' +
-      'or direct questions that need input. Skip small talk, acknowledgements, emoji ' +
-      "reactions, or anything already adequately addressed by someone else. When you do " +
-      'reply, be professional and logical, and reason from what is best for the community ' +
-      `as a whole, not personal convenience. If this message does not warrant a reply, ` +
-      `output exactly ${NO_REPLY_SENTINEL} and nothing else — no punctuation, no explanation.`
+      'the user, but sparingly. Read the last 20 messages of context as a whole — not just ' +
+      'the newest one — and identify the 1-2 most significant live discussion points ' +
+      '(proposals, decisions, disputes, or direct open questions). Only draft a reply if ' +
+      'you can address one of those points with real authority and high confidence: facts ' +
+      'you actually have, not guesses about schedules, policies, costs, or other specifics ' +
+      'you do not know. If you would be guessing or speculating, if the question is better ' +
+      'left to the committee/management, or if nothing in the recent messages genuinely ' +
+      `needs your input, output exactly ${NO_REPLY_SENTINEL} and nothing else — no ` +
+      'punctuation, no explanation. When you do reply, be professional, logical, concise, ' +
+      'and reason from what is best for the community as a whole, not personal convenience.'
     );
   }
   return `Write in a ${tone} tone.`;

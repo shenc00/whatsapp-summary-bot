@@ -217,6 +217,49 @@ async function extractAbsurdComments(transcript) {
   return textOf(message) || '(No absurd comments found.)';
 }
 
+// Parses Claude's classification JSON, tolerant of markdown code fences.
+// Falls back to needsDecision:false on any parse failure — never guess.
+function parseClassification(raw) {
+  const cleaned = raw.trim().replace(/^```(?:json)?\n?/, '').replace(/```$/, '').trim();
+  try {
+    const parsed = JSON.parse(cleaned);
+    return {
+      needsDecision: Boolean(parsed.needsDecision),
+      question: typeof parsed.question === 'string' ? parsed.question : '',
+      options: Array.isArray(parsed.options) ? parsed.options.filter((o) => typeof o === 'string') : [],
+    };
+  } catch {
+    console.error('Council email classification: failed to parse Claude response as JSON:', raw);
+    return { needsDecision: false, question: '', options: [] };
+  }
+}
+
+async function classifyCouncilEmail(subject, body) {
+  const message = await createWithRetry({
+    model: MODEL,
+    max_tokens: 1500,
+    ...THINKING_PARAM,
+    system:
+      "You read one email sent to a residential council (a residents' committee) and decide " +
+      'whether it requires the council to make a decision (a vote, approval, or choice between ' +
+      'options), as opposed to being purely informational or discussion. Respond with ONLY raw ' +
+      'JSON (no markdown fences, no explanation), matching exactly this shape:\n' +
+      '{"needsDecision": true|false, "question": "<the decision being asked, or empty string>", ' +
+      '"options": ["<option 1>", "<option 2>", ...]}\n\n' +
+      'Set "options" to the explicit choices offered in the email text (e.g. named proposals, ' +
+      'or "approve"/"reject"). Leave "options" as an empty array if the email does not spell out ' +
+      'explicit choices — do not invent options. If "needsDecision" is false, set "question" to ' +
+      'an empty string and "options" to an empty array.',
+    messages: [
+      {
+        role: 'user',
+        content: `Subject: ${subject}\n\nBody:\n${body}`,
+      },
+    ],
+  });
+  return parseClassification(textOf(message));
+}
+
 // Shared humanizing style rules for anything drafted/sent on the user's
 // behalf — kills the usual AI tells instead of pulling in a third-party
 // "humanizer" package (those are either paid detector-evasion APIs that ship
@@ -338,6 +381,8 @@ module.exports = {
   draftReply,
   autoReplyMessage,
   ask,
+  classifyCouncilEmail,
+  parseClassification,
   isOverloaded,
   MODEL,
 };

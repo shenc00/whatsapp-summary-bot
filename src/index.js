@@ -17,6 +17,8 @@ const {
   isOverloaded,
   MODEL,
 } = require('./claude');
+const { runCouncilCheck } = require('./council');
+const { hasValidToken } = require('./gmail');
 
 // 'scam' and 'discussion' are special modes (see claude.js toneInstruction),
 // not just a tone of voice — 'scam' scambaits an incoming scammer, keeping
@@ -26,6 +28,7 @@ const REPLY_TONES = ['casual', 'formal', 'funny', 'firm', 'warm', 'blunt', 'apol
 const REPLY_CONTEXT_COUNT = 10;
 const AUTOREPLY_CONTEXT_COUNT = 20; // live autoreply looks further back than manual !reply
 const CHATS_LIST_LIMIT = 10;
+const COUNCIL_POLL_INTERVAL_MS = 60 * 60 * 1000;
 
 if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
   console.error('❌ ANTHROPIC_API_KEY is missing or still the placeholder. Edit .env and paste your real key from https://console.anthropic.com/');
@@ -75,6 +78,10 @@ const client = new Client({
     : {}),
 });
 
+// Handle for the hourly council-check timer (started in 'ready', cleared in
+// 'disconnected' so a dropped session doesn't leave it running forever).
+let councilInterval = null;
+
 let pairingRequested = false;
 client.on('qr', async (qr) => {
   const phone = (process.env.PAIRING_PHONE_NUMBER || '').replace(/[^0-9]/g, '');
@@ -102,11 +109,34 @@ client.on('auth_failure', (m) => {
 });
 client.on('disconnected', (r) => {
   console.warn('⚠️  Disconnected:', r, '— exiting so the supervisor restarts and prompts for re-auth.');
+  if (councilInterval) clearInterval(councilInterval);
   process.exit(1);
 });
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
-  console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !relationships · !meetup · !absurd · !ai · !autoreply · !help');
+  console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !relationships · !meetup · !absurd · !ai · !councilpoll · !autoreply · !help');
+
+  if (hasValidToken()) {
+    councilInterval = setInterval(async () => {
+      try {
+        const { checked, posted } = await runCouncilCheck(client);
+        if (posted > 0) {
+          console.log(`Council check: ${checked} email(s) checked, ${posted} poll(s) posted.`);
+        }
+      } catch (err) {
+        console.error('Council check failed:', err.message || err);
+        try {
+          const selfChat = await client.getChatById(client.info.wid._serialized);
+          await selfChat.sendMessage(`⚠️ Council email check failed: ${err.message || err}`);
+        } catch (notifyErr) {
+          console.error('Council check: also failed to notify via self-chat:', notifyErr.message || notifyErr);
+        }
+      }
+    }, COUNCIL_POLL_INTERVAL_MS);
+    console.log(`   Council email check running every ${COUNCIL_POLL_INTERVAL_MS / 60000} min.`);
+  } else {
+    console.log('   Council email check disabled — run `npm run gmail:auth` to enable it.');
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -389,6 +419,16 @@ client.on('message_create', async (msg) => {
       const reply = await ask(question);
       await selfChat.sendMessage(reply);
 
+    } else if (command === '!councilpoll') {
+      await selfChat.sendStateTyping();
+      const { checked, posted, failed } = await runCouncilCheck(client);
+      const failedNote = failed ? ` (${failed} failed, check logs)` : '';
+      await selfChat.sendMessage(
+        checked === 0
+          ? '_(No new emails from the council sender found.)_'
+          : `✅ Checked ${checked} email(s), posted ${posted} poll(s) to the council group.${failedNote}`
+      );
+
     } else if (command === '!autoreply') {
       const arg = (args[0] || '').toLowerCase();
       const id = targetChat.id._serialized;
@@ -455,6 +495,7 @@ client.on('message_create', async (msg) => {
           '• `!reply <chat#> <pasted message> [tone]` — draft a reply to that specific message instead\n' +
           `  _(tones: ${REPLY_TONES.join(', ')})_\n` +
           '• `!ai <question>` — ask Claude anything\n' +
+          '• `!councilpoll` — check for new council decision emails and post polls for any found\n' +
           '• `!autoreply <chat#|name> on [tone] | off` — toggle live auto-replies in a chat\n' +
           '  _(`scam` tone: scambaits a suspected scammer, never reveals real personal/financial info.\n' +
           '  `discussion` tone: for a group — only replies to significant messages, professional/logical, community-minded.)_\n' +

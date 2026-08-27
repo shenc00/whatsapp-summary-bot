@@ -19,6 +19,7 @@ It links to your existing WhatsApp account through the same **"Linked Devices"**
 | `!reply <chat#> [tone]` | Drafts a reply to the last incoming message in that chat |
 | `!reply <chat#> <pasted message> [tone]` | Drafts a reply to that specific message instead (tones: casual, formal, funny, firm, warm, blunt, apologetic, assertive, playful, professional) |
 | `!ai <question>` | Asks Claude a one-off question (no chat needed) |
+| `!councilpoll` | Checks for new council decision emails and posts polls for any found (also runs automatically every hour) |
 | `!autoreply <chat#> on` / `off` | Turns automatic replies on/off **for that chat** |
 | `!help` | Lists the commands |
 
@@ -110,6 +111,14 @@ Open your own **Saved Messages** chat (search "You" in WhatsApp, or message your
 ```
 
 Because the bot is *your* account, you can type these commands yourself from your own phone. The bot only reacts to commands typed in Saved Messages and replies there too — it never touches the group/contact chat you're asking about.
+
+### 6. (Optional) Enable council email polls
+
+Lets the bot watch a mailbox for emails that need a council decision and post a WhatsApp poll for them (`!councilpoll`, plus an automatic hourly check).
+
+1. In Google Cloud, create an OAuth client of type **Desktop app** with the **Gmail API** enabled, and set `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in `.env` (see `.env.example`).
+2. Run `npm run gmail:auth` once and approve access in the browser tab it opens.
+3. **Important:** if that OAuth app is left in Google's **"Testing"** publishing status, its refresh token expires after 7 days and the automatic check will start failing weekly with `invalid_grant`. Either move the OAuth consent screen to **"In production"**, or plan to re-run `npm run gmail:auth` about once a week.
 
 ---
 

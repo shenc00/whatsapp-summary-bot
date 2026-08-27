@@ -46,7 +46,13 @@ function extractBody(payload) {
   const plain = findPart(payload, 'text/plain');
   if (plain) return decodePart(plain);
   const html = findPart(payload, 'text/html');
-  if (html) return decodePart(html).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (html) {
+    return decodePart(html)
+      .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
   return '';
 }
 

@@ -40,6 +40,19 @@ function testGmailHelpers() {
   };
   assert.strictEqual(extractBody(nestedPayload), 'Nested plain body');
 
+  const htmlWithStylePayload = {
+    mimeType: 'multipart/alternative',
+    parts: [
+      {
+        mimeType: 'text/html',
+        body: {
+          data: Buffer.from('<style>body{color:red}</style><p>Real content</p>').toString('base64url'),
+        },
+      },
+    ],
+  };
+  assert.strictEqual(extractBody(htmlWithStylePayload), 'Real content');
+
   console.log('gmail.js: PASS');
 }
 

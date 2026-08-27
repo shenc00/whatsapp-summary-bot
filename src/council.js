@@ -54,19 +54,18 @@ async function runCouncilCheck(waClient) {
       if (classification.needsDecision) {
         const chat = await resolveCouncilChat(waClient);
         if (!chat) {
-          console.error(
+          throw new Error(
             `Council chat "${process.env.COUNCIL_GROUP_NAME || 'The OG Ki Council'}" not found ` +
             `or ambiguous — skipping poll for "${email.subject}".`
           );
-        } else {
-          await chat.sendMessage(`📧 *${email.subject}* — from ${process.env.COUNCIL_SENDER || 'kiresidencesma@gmail.com'}`);
-          await chat.sendMessage(
-            new Poll(classification.question || email.subject, optionsWithFallback(classification.options), {
-              allowMultipleAnswers: false,
-            })
-          );
-          posted++;
         }
+        await chat.sendMessage(`📧 *${email.subject}* — from ${process.env.COUNCIL_SENDER || 'kiresidencesma@gmail.com'}`);
+        await chat.sendMessage(
+          new Poll(classification.question || email.subject, optionsWithFallback(classification.options), {
+            allowMultipleAnswers: false,
+          })
+        );
+        posted++;
       }
       processedIds.push(email.id);
     } catch (err) {

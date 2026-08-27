@@ -229,6 +229,7 @@ function parseClassification(raw) {
       options: Array.isArray(parsed.options) ? parsed.options.filter((o) => typeof o === 'string') : [],
     };
   } catch {
+    console.error('Council email classification: failed to parse Claude response as JSON:', raw);
     return { needsDecision: false, question: '', options: [] };
   }
 }
@@ -236,7 +237,7 @@ function parseClassification(raw) {
 async function classifyCouncilEmail(subject, body) {
   const message = await createWithRetry({
     model: MODEL,
-    max_tokens: 500,
+    max_tokens: 1500,
     ...THINKING_PARAM,
     system:
       "You read one email sent to a residential council (a residents' committee) and decide " +

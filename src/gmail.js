@@ -6,7 +6,6 @@ const { google } = require('googleapis');
 const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly'];
 const TOKEN_PATH = path.join(__dirname, '..', 'gmail-token.json');
 const REDIRECT_URI = 'http://localhost:53682/oauth2callback';
-const COUNCIL_RECIPIENT = 'cshen.1002@gmail.com';
 
 function hasValidToken() {
   return fs.existsSync(TOKEN_PATH);
@@ -62,13 +61,17 @@ function filterUnprocessed(emails, processedIds) {
   return emails.filter((e) => !seen.has(e.id));
 }
 
-// Fetches emails from COUNCIL_SENDER to the council recipient, from the
-// last 7 days, excluding anything already in processedIds. Newest first.
+// Fetches emails from COUNCIL_SENDER, from the last 7 days, excluding
+// anything already in processedIds. Newest first.
+// No `to:` filter — the API call below is scoped to `userId: 'me'` already,
+// so anything from the sender is already addressed to this mailbox one way
+// or another; a `to:` clause only matches the To header and would silently
+// miss mail where the sender Cc's/Bcc's this account instead.
 async function fetchCouncilCandidateEmails(processedIds) {
   const auth = getOAuthClient();
   const gmail = google.gmail({ version: 'v1', auth });
   const sender = process.env.COUNCIL_SENDER || 'kiresidencesma@gmail.com';
-  const q = `from:${sender} to:${COUNCIL_RECIPIENT} newer_than:7d`;
+  const q = `from:${sender} newer_than:7d`;
 
   const list = await gmail.users.messages.list({ userId: 'me', q, maxResults: 25 });
   const candidateIds = (list.data.messages || []).map((m) => ({ id: m.id }));

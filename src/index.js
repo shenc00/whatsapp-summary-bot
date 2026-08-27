@@ -78,6 +78,10 @@ const client = new Client({
     : {}),
 });
 
+// Handle for the hourly council-check timer (started in 'ready', cleared in
+// 'disconnected' so a dropped session doesn't leave it running forever).
+let councilInterval = null;
+
 let pairingRequested = false;
 client.on('qr', async (qr) => {
   const phone = (process.env.PAIRING_PHONE_NUMBER || '').replace(/[^0-9]/g, '');
@@ -100,13 +104,16 @@ client.on('qr', async (qr) => {
 
 client.on('authenticated', () => console.log('🔐 Authenticated.'));
 client.on('auth_failure', (m) => console.error('❌ Auth failure:', m));
-client.on('disconnected', (r) => console.warn('⚠️  Disconnected:', r));
+client.on('disconnected', (r) => {
+  console.warn('⚠️  Disconnected:', r);
+  if (councilInterval) clearInterval(councilInterval);
+});
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
   console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !relationships · !meetup · !absurd · !ai · !councilpoll · !autoreply · !help');
 
   if (hasValidToken()) {
-    setInterval(async () => {
+    councilInterval = setInterval(async () => {
       try {
         const { checked, posted } = await runCouncilCheck(client);
         if (posted > 0) {
@@ -117,8 +124,8 @@ client.on('ready', () => {
         try {
           const selfChat = await client.getChatById(client.info.wid._serialized);
           await selfChat.sendMessage(`⚠️ Council email check failed: ${err.message || err}`);
-        } catch {
-          /* ignore */
+        } catch (notifyErr) {
+          console.error('Council check: also failed to notify via self-chat:', notifyErr.message || notifyErr);
         }
       }
     }, COUNCIL_POLL_INTERVAL_MS);
@@ -410,11 +417,12 @@ client.on('message_create', async (msg) => {
 
     } else if (command === '!councilpoll') {
       await selfChat.sendStateTyping();
-      const { checked, posted } = await runCouncilCheck(client);
+      const { checked, posted, failed } = await runCouncilCheck(client);
+      const failedNote = failed ? ` (${failed} failed, check logs)` : '';
       await selfChat.sendMessage(
         checked === 0
           ? '_(No new emails from the council sender found.)_'
-          : `✅ Checked ${checked} email(s), posted ${posted} poll(s) to the council group.`
+          : `✅ Checked ${checked} email(s), posted ${posted} poll(s) to the council group.${failedNote}`
       );
 
     } else if (command === '!autoreply') {

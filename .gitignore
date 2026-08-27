@@ -7,3 +7,6 @@ council-state.json
 # whatsapp-web.js session + Puppeteer cache (contains your linked-device session — never commit)
 .wwebjs_auth/
 .wwebjs_cache/
+.heartbeat
+qr.txt
+.wwebjs_auth.stale.*

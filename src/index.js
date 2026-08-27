@@ -29,6 +29,8 @@ const REPLY_CONTEXT_COUNT = 10;
 const AUTOREPLY_CONTEXT_COUNT = 20; // live autoreply looks further back than manual !reply
 const CHATS_LIST_LIMIT = 10;
 const COUNCIL_POLL_INTERVAL_MS = 60 * 60 * 1000;
+const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+const HEARTBEAT_FILE = path.join(__dirname, '..', '.heartbeat');
 
 if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
   console.error('❌ ANTHROPIC_API_KEY is missing or still the placeholder. Edit .env and paste your real key from https://console.anthropic.com/');
@@ -81,6 +83,25 @@ const client = new Client({
 // Handle for the hourly council-check timer (started in 'ready', cleared in
 // 'disconnected' so a dropped session doesn't leave it running forever).
 let councilInterval = null;
+let heartbeatInterval = null;
+
+// Touches a file only while WhatsApp is genuinely linked. The process being
+// alive proves nothing — this bot once sat on a QR screen for six hours while
+// pm2 happily reported it "online". An external monitor watches this file's
+// mtime instead (see scripts/health-check.sh).
+function startHeartbeat() {
+  const beat = async () => {
+    try {
+      if ((await client.getState()) === 'CONNECTED') {
+        fs.writeFileSync(HEARTBEAT_FILE, String(Date.now()));
+      }
+    } catch {
+      // Session gone or still starting — leave the file stale on purpose.
+    }
+  };
+  beat();
+  heartbeatInterval = setInterval(beat, HEARTBEAT_INTERVAL_MS);
+}
 
 // requestPairingCode throws an opaque error when WhatsApp Web has not
 // finished initialising, which happens on some restarts but not others — so
@@ -137,10 +158,12 @@ client.on('auth_failure', (m) => {
 client.on('disconnected', (r) => {
   console.warn('⚠️  Disconnected:', r, '— exiting so the supervisor restarts and prompts for re-auth.');
   if (councilInterval) clearInterval(councilInterval);
+  if (heartbeatInterval) clearInterval(heartbeatInterval);
   process.exit(1);
 });
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
+  startHeartbeat();
   console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !relationships · !meetup · !absurd · !ai · !councilpoll · !autoreply · !help');
 
   if (hasValidToken()) {

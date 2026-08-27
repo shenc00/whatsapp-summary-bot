@@ -61,4 +61,16 @@ function testClaudeHelpers() {
 }
 
 testClaudeHelpers();
+
+function testCouncilHelpers() {
+  const { optionsWithFallback, FALLBACK_OPTIONS } = require('./src/council');
+
+  assert.deepStrictEqual(optionsWithFallback(['Vendor A', 'Vendor B']), ['Vendor A', 'Vendor B']);
+  assert.deepStrictEqual(optionsWithFallback([]), FALLBACK_OPTIONS);
+  assert.deepStrictEqual(optionsWithFallback(undefined), FALLBACK_OPTIONS);
+
+  console.log('council.js: PASS');
+}
+
+testCouncilHelpers();
 console.log('All council tests passed.');

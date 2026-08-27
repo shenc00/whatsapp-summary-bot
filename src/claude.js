@@ -225,12 +225,13 @@ function parseClassification(raw) {
     const parsed = JSON.parse(cleaned);
     return {
       needsDecision: Boolean(parsed.needsDecision),
+      background: typeof parsed.background === 'string' ? parsed.background : '',
       question: typeof parsed.question === 'string' ? parsed.question : '',
       options: Array.isArray(parsed.options) ? parsed.options.filter((o) => typeof o === 'string') : [],
     };
   } catch {
     console.error('Council email classification: failed to parse Claude response as JSON:', raw);
-    return { needsDecision: false, question: '', options: [] };
+    return { needsDecision: false, background: '', question: '', options: [] };
   }
 }
 
@@ -244,12 +245,27 @@ async function classifyCouncilEmail(subject, body) {
       'whether it requires the council to make a decision (a vote, approval, or choice between ' +
       'options), as opposed to being purely informational or discussion. Respond with ONLY raw ' +
       'JSON (no markdown fences, no explanation), matching exactly this shape:\n' +
-      '{"needsDecision": true|false, "question": "<the decision being asked, or empty string>", ' +
+      '{"needsDecision": true|false, "background": "<one sentence of context, or empty string>", ' +
+      '"question": "<the decision being asked, or empty string>", ' +
       '"options": ["<option 1>", "<option 2>", ...]}\n\n' +
       'Set "options" to the explicit choices offered in the email text (e.g. named proposals, ' +
       'or "approve"/"reject"). Leave "options" as an empty array if the email does not spell out ' +
       'explicit choices — do not invent options. If "needsDecision" is false, set "question" to ' +
-      'an empty string and "options" to an empty array.',
+      'an empty string, "background" to an empty string, and "options" to an empty array.\n\n' +
+      'Set "background" to ONE plain sentence of AT MOST 20 WORDS saying what the management ' +
+      'office is proposing, so a council member who has not read the email thread still ' +
+      'understands what they are voting on. Use only facts stated in the email — keep the ' +
+      'single most decision-relevant detail (the amount, the vendor, or the date) and drop ' +
+      'the rest.' +
+
+      'Set "question" to the decision itself in AT MOST 15 WORDS. "background" and ' +
+      '"question" are shown joined together and are hard-truncated past 255 characters ' +
+      'total, so both must be short.\n\n' +
+      'When the decision is a straight yes/no approval, use exactly ["Yes", "No"] — never add ' +
+      '"Abstain", "No opinion", or any third opt-out choice. Keep every option under 100 ' +
+      'characters: an option is a short label for one choice, not a summary of the proposal. ' +
+      'When a proposal bundles several parts, put the bundle in "question" and keep the options ' +
+      'short.',
     messages: [
       {
         role: 'user',

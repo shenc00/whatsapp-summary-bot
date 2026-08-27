@@ -82,24 +82,51 @@ const client = new Client({
 // 'disconnected' so a dropped session doesn't leave it running forever).
 let councilInterval = null;
 
+// requestPairingCode throws an opaque error when WhatsApp Web has not
+// finished initialising, which happens on some restarts but not others — so
+// retry a few times before giving up and falling back to the QR.
+async function requestPairingCodeWithRetry(phone, attempts = 4) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await client.requestPairingCode(phone);
+    } catch (err) {
+      lastErr = err;
+      await new Promise((resolve) => setTimeout(resolve, 6000));
+    }
+  }
+  throw lastErr;
+}
+
 let pairingRequested = false;
+let pairingCodeIssued = false;
 client.on('qr', async (qr) => {
   const phone = (process.env.PAIRING_PHONE_NUMBER || '').replace(/[^0-9]/g, '');
-  if (phone) {
-    if (pairingRequested) return;
+  // A pairing code stays valid across the QR refreshes that follow it, so
+  // once one is issued later 'qr' events are ignored rather than printed.
+  if (phone && pairingCodeIssued) return;
+  if (phone && !pairingRequested) {
     pairingRequested = true;
     try {
-      const code = await client.requestPairingCode(phone);
+      const code = await requestPairingCodeWithRetry(phone);
+      pairingCodeIssued = true;
       console.log('\n🔗 On WhatsApp: Settings → Linked Devices → Link a Device →');
       console.log('   tap "Link with phone number instead", then enter this code:\n');
       console.log(`        ${code}\n`);
+      return;
     } catch (err) {
-      console.error('❌ Could not get a pairing code:', err.message);
+      // Falling through to the QR below: a failed pairing request used to
+      // return here, which left the bot showing nothing at all and unable
+      // to be linked until someone restarted it.
+      console.error('❌ Could not get a pairing code:', err.message, '— falling back to QR.');
     }
-    return;
   }
   console.log('\n📱 Open WhatsApp on another device → Settings → Linked Devices → Link a Device, then scan:\n');
   qrcode.generate(qr, { small: true });
+  // Also drop the raw payload next to the bot: a QR rendered as terminal
+  // half-blocks often will not scan off a screen, so this lets you render
+  // it as a real image instead.
+  try { fs.writeFileSync(path.join(__dirname, '..', 'qr.txt'), qr); } catch {}
 });
 
 client.on('authenticated', () => console.log('🔐 Authenticated.'));

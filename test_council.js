@@ -62,13 +62,17 @@ function testClaudeHelpers() {
   const { parseClassification } = require('./src/claude');
 
   const clean = parseClassification('{"needsDecision": true, "question": "Approve the new gate vendor?", "options": ["Vendor A", "Vendor B"]}');
-  assert.deepStrictEqual(clean, { needsDecision: true, question: 'Approve the new gate vendor?', options: ['Vendor A', 'Vendor B'] });
+  assert.deepStrictEqual(clean, { needsDecision: true, background: '', question: 'Approve the new gate vendor?', options: ['Vendor A', 'Vendor B'] });
+
+  // A response carrying the background sentence keeps it.
+  const withBackground = parseClassification('{"needsDecision": true, "background": "Office picked two vendors.", "question": "Approve?", "options": ["Yes", "No"]}');
+  assert.deepStrictEqual(withBackground, { needsDecision: true, background: 'Office picked two vendors.', question: 'Approve?', options: ['Yes', 'No'] });
 
   const fenced = parseClassification('```json\n{"needsDecision": false, "question": "", "options": []}\n```');
-  assert.deepStrictEqual(fenced, { needsDecision: false, question: '', options: [] });
+  assert.deepStrictEqual(fenced, { needsDecision: false, background: '', question: '', options: [] });
 
   const garbage = parseClassification('not json at all');
-  assert.deepStrictEqual(garbage, { needsDecision: false, question: '', options: [] });
+  assert.deepStrictEqual(garbage, { needsDecision: false, background: '', question: '', options: [] });
 
   console.log('claude.js: PASS');
 }
@@ -76,7 +80,7 @@ function testClaudeHelpers() {
 testClaudeHelpers();
 
 function testCouncilHelpers() {
-  const { optionsWithFallback, capQuestion, FALLBACK_OPTIONS } = require('./src/council');
+  const { optionsWithFallback, capQuestion, pollQuestion, normalizeSubject, FALLBACK_OPTIONS } = require('./src/council');
 
   assert.deepStrictEqual(optionsWithFallback(['Vendor A', 'Vendor B']), ['Vendor A', 'Vendor B']);
   assert.deepStrictEqual(optionsWithFallback([]), FALLBACK_OPTIONS);
@@ -88,6 +92,31 @@ function testCouncilHelpers() {
   assert.deepStrictEqual(optionsWithFallback(['Approve', 'x'.repeat(101)]), FALLBACK_OPTIONS);
   // Exactly at the length cap is still fine.
   assert.deepStrictEqual(optionsWithFallback(['Approve', 'x'.repeat(100)]), ['Approve', 'x'.repeat(100)]);
+
+  // A yes/no vote needs no opt-out — "Abstain" is dropped, not offered.
+  assert.deepStrictEqual(optionsWithFallback(['Yes', 'No', 'Abstain']), ['Yes', 'No']);
+  assert.deepStrictEqual(optionsWithFallback(['Approve', 'Reject', 'No opinion']), ['Approve', 'Reject']);
+  // Dropping the opt-out must not push a real 2-option vote below the minimum.
+  assert.deepStrictEqual(optionsWithFallback(['Approve', 'Abstain']), FALLBACK_OPTIONS);
+  assert.deepStrictEqual(FALLBACK_OPTIONS, ['Yes', 'No']);
+
+  // Every reply in a thread collapses to one key, so one subject = one poll.
+  assert.strictEqual(normalizeSubject('RE: Shuttle Bus Arrangement'), 'shuttle bus arrangement');
+  assert.strictEqual(normalizeSubject('Fwd: RE:  Shuttle   Bus Arrangement '), 'shuttle bus arrangement');
+  assert.strictEqual(normalizeSubject('Shuttle Bus Arrangement'), 'shuttle bus arrangement');
+  assert.notStrictEqual(normalizeSubject('Reduce parking fees'), normalizeSubject('Raise parking fees'));
+
+  // Background sentence leads the poll question so a member voting from the
+  // notification knows the context without opening the email thread.
+  assert.strictEqual(
+    pollQuestion('Office proposes card payment for facility bookings.', 'Approve it?'),
+    'Office proposes card payment for facility bookings. Approve it?'
+  );
+  // No background from the classifier leaves the question intact.
+  assert.strictEqual(pollQuestion('', 'Approve it?'), 'Approve it?');
+  assert.strictEqual(pollQuestion(undefined, 'Approve it?'), 'Approve it?');
+  // Background plus question must still respect the 255-char poll cap.
+  assert.strictEqual(pollQuestion('x'.repeat(200), 'y'.repeat(200)).length, 255);
 
   assert.strictEqual(capQuestion('Short question?'), 'Short question?');
   const longQuestion = 'x'.repeat(300);

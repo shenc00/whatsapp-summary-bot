@@ -6,33 +6,59 @@ const { fetchCouncilCandidateEmails } = require('./gmail');
 const { classifyCouncilEmail } = require('./claude');
 
 const STATE_FILE = path.join(__dirname, '..', 'council-state.json');
-const FALLBACK_OPTIONS = ['Yes', 'No', 'Abstain'];
+const FALLBACK_OPTIONS = ['Yes', 'No'];
 // WhatsApp poll limits: 2-12 options, ~100 chars/option, ~255 char question.
 const MAX_OPTION_LENGTH = 100;
 const MAX_QUESTION_LENGTH = 255;
 
-function loadProcessedIds() {
+// Strips any run of "Re:"/"Fw:"/"Fwd:" prefixes so every reply in a mail
+// thread collapses to the same key — one email subject gets one poll, not one
+// per reply.
+function normalizeSubject(subject) {
+  return (subject || '')
+    .replace(/^(?:\s*(?:re|fwd|fw)\s*:)+\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// State is { ids, subjects }. Older versions wrote a bare array of ids —
+// still read those so an existing council-state.json keeps working.
+function loadState() {
   try {
-    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    if (Array.isArray(raw)) return { ids: raw, subjects: [] };
+    return { ids: raw.ids || [], subjects: raw.subjects || [] };
   } catch {
-    return [];
+    return { ids: [], subjects: [] };
   }
 }
 
-function saveProcessedIds(ids) {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(ids));
+function saveState(state) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state));
 }
 
-// Applies the Yes/No/Abstain fallback when Claude found too few options
+// Applies the Yes/No fallback when Claude found too few options
 // (WhatsApp polls need at least 2) or any option is too long. Truncating an
 // option would read as broken, so fall back to the safe default instead.
 // ponytail: doesn't guard the 12-option upper bound (Claude producing 13+
 // distinct options is far-fetched) — add a `.length > 12` check here if it
 // ever happens.
 function optionsWithFallback(options) {
-  if (!options || options.length < 2) return FALLBACK_OPTIONS;
-  if (options.some((o) => o.length > MAX_OPTION_LENGTH)) return FALLBACK_OPTIONS;
-  return options;
+  // A yes/no vote is already complete without an opt-out — drop "Abstain"
+  // (and its wordier variants) before the 2-option minimum is checked.
+  const kept = (options || []).filter((o) => !/^\s*(abstain|no opinion|neither)/i.test(o));
+  if (kept.length < 2) return FALLBACK_OPTIONS;
+  if (kept.some((o) => o.length > MAX_OPTION_LENGTH)) return FALLBACK_OPTIONS;
+  return kept;
+}
+
+// Builds the poll question: one sentence of background, then the decision
+// itself, so a member voting straight from the notification knows what it is
+// about without opening the email thread.
+function pollQuestion(background, question) {
+  const parts = [background, question].map((p) => (p || '').trim()).filter(Boolean);
+  return capQuestion(parts.join(' '));
 }
 
 // Caps the poll question length — safe to truncate (unlike an option, it's
@@ -74,8 +100,8 @@ async function runCouncilCheck(waClient) {
   if (running) return { checked: 0, posted: 0, failed: 0 };
   running = true;
   try {
-    const processedIds = loadProcessedIds();
-    const emails = await fetchCouncilCandidateEmails(processedIds);
+    const state = loadState();
+    const emails = await fetchCouncilCandidateEmails(state.ids);
     if (!emails.length) return { checked: 0, posted: 0, failed: 0 };
 
     const chat = await resolveCouncilChat(waClient);
@@ -85,28 +111,39 @@ async function runCouncilCheck(waClient) {
       );
     }
 
+    // Emails arrive newest-first, so the first one seen for a thread is the
+    // latest in it — later replies on the same subject are skipped.
+    const postedSubjects = new Set(state.subjects);
+
     let posted = 0;
     let failed = 0;
     for (const email of emails) {
+      const key = normalizeSubject(email.subject);
+      if (postedSubjects.has(key)) {
+        state.ids.push(email.id);
+        continue;
+      }
       try {
         const classification = await classifyCouncilEmail(email.subject, email.body);
         if (classification.needsDecision) {
           await chat.sendMessage(`📧 *${email.subject}* — from ${process.env.COUNCIL_SENDER || 'kiresidencesma@gmail.com'}`);
           await chat.sendMessage(
-            new Poll(capQuestion(classification.question || email.subject), optionsWithFallback(classification.options), {
+            new Poll(pollQuestion(classification.background, classification.question || email.subject), optionsWithFallback(classification.options), {
               allowMultipleAnswers: false,
             })
           );
           posted++;
+          postedSubjects.add(key);
+          state.subjects.push(key);
         }
       } catch (err) {
         failed++;
         console.error(`Council check: failed on email "${email.subject}" (${email.id}):`, err.message || err);
       } finally {
-        processedIds.push(email.id);
+        state.ids.push(email.id);
       }
     }
-    saveProcessedIds(processedIds);
+    saveState(state);
     return { checked: emails.length, posted, failed };
   } finally {
     running = false;
@@ -115,7 +152,9 @@ async function runCouncilCheck(waClient) {
 
 module.exports = {
   runCouncilCheck,
+  normalizeSubject,
   optionsWithFallback,
+  pollQuestion,
   capQuestion,
   resolveCouncilChat,
   FALLBACK_OPTIONS,

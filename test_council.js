@@ -63,11 +63,24 @@ function testClaudeHelpers() {
 testClaudeHelpers();
 
 function testCouncilHelpers() {
-  const { optionsWithFallback, FALLBACK_OPTIONS } = require('./src/council');
+  const { optionsWithFallback, capQuestion, FALLBACK_OPTIONS } = require('./src/council');
 
   assert.deepStrictEqual(optionsWithFallback(['Vendor A', 'Vendor B']), ['Vendor A', 'Vendor B']);
   assert.deepStrictEqual(optionsWithFallback([]), FALLBACK_OPTIONS);
   assert.deepStrictEqual(optionsWithFallback(undefined), FALLBACK_OPTIONS);
+  // A single option is below WhatsApp's 2-option minimum — falls back.
+  assert.deepStrictEqual(optionsWithFallback(['Approve']), FALLBACK_OPTIONS);
+  // An over-length option would be rejected by WhatsApp — falls back rather
+  // than truncating (truncating an option reads as broken).
+  assert.deepStrictEqual(optionsWithFallback(['Approve', 'x'.repeat(101)]), FALLBACK_OPTIONS);
+  // Exactly at the length cap is still fine.
+  assert.deepStrictEqual(optionsWithFallback(['Approve', 'x'.repeat(100)]), ['Approve', 'x'.repeat(100)]);
+
+  assert.strictEqual(capQuestion('Short question?'), 'Short question?');
+  const longQuestion = 'x'.repeat(300);
+  const capped = capQuestion(longQuestion);
+  assert.strictEqual(capped.length, 255);
+  assert.ok(capped.endsWith('…'));
 
   console.log('council.js: PASS');
 }

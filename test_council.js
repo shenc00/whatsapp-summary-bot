@@ -44,4 +44,21 @@ function testGmailHelpers() {
 }
 
 testGmailHelpers();
+
+function testClaudeHelpers() {
+  const { parseClassification } = require('./src/claude');
+
+  const clean = parseClassification('{"needsDecision": true, "question": "Approve the new gate vendor?", "options": ["Vendor A", "Vendor B"]}');
+  assert.deepStrictEqual(clean, { needsDecision: true, question: 'Approve the new gate vendor?', options: ['Vendor A', 'Vendor B'] });
+
+  const fenced = parseClassification('```json\n{"needsDecision": false, "question": "", "options": []}\n```');
+  assert.deepStrictEqual(fenced, { needsDecision: false, question: '', options: [] });
+
+  const garbage = parseClassification('not json at all');
+  assert.deepStrictEqual(garbage, { needsDecision: false, question: '', options: [] });
+
+  console.log('claude.js: PASS');
+}
+
+testClaudeHelpers();
 console.log('All council tests passed.');

@@ -17,6 +17,7 @@ const {
   isOverloaded,
   MODEL,
 } = require('./claude');
+const { runCouncilCheck } = require('./council');
 
 // 'scam' and 'discussion' are special modes (see claude.js toneInstruction),
 // not just a tone of voice — 'scam' scambaits an incoming scammer, keeping
@@ -383,6 +384,15 @@ client.on('message_create', async (msg) => {
       const reply = await ask(question);
       await selfChat.sendMessage(reply);
 
+    } else if (command === '!councilpoll') {
+      await selfChat.sendStateTyping();
+      const { checked, posted } = await runCouncilCheck(client);
+      await selfChat.sendMessage(
+        checked === 0
+          ? '_(No new emails from the council sender found.)_'
+          : `✅ Checked ${checked} email(s), posted ${posted} poll(s) to the council group.`
+      );
+
     } else if (command === '!autoreply') {
       const arg = (args[0] || '').toLowerCase();
       const id = targetChat.id._serialized;
@@ -449,6 +459,7 @@ client.on('message_create', async (msg) => {
           '• `!reply <chat#> <pasted message> [tone]` — draft a reply to that specific message instead\n' +
           `  _(tones: ${REPLY_TONES.join(', ')})_\n` +
           '• `!ai <question>` — ask Claude anything\n' +
+          '• `!councilpoll` — check for new council decision emails and post polls for any found\n' +
           '• `!autoreply <chat#|name> on [tone] | off` — toggle live auto-replies in a chat\n' +
           '  _(`scam` tone: scambaits a suspected scammer, never reveals real personal/financial info.\n' +
           '  `discussion` tone: for a group — only replies to significant messages, professional/logical, community-minded.)_\n' +

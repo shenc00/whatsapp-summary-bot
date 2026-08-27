@@ -1,6 +1,7 @@
 node_modules/
 .env
 autoreply.json
+gmail-token.json
 
 # whatsapp-web.js session + Puppeteer cache (contains your linked-device session — never commit)
 .wwebjs_auth/

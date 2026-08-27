@@ -96,8 +96,14 @@ client.on('qr', async (qr) => {
 });
 
 client.on('authenticated', () => console.log('🔐 Authenticated.'));
-client.on('auth_failure', (m) => console.error('❌ Auth failure:', m));
-client.on('disconnected', (r) => console.warn('⚠️  Disconnected:', r));
+client.on('auth_failure', (m) => {
+  console.error('❌ Auth failure:', m, '— exiting so the supervisor restarts and prompts for re-auth.');
+  process.exit(1);
+});
+client.on('disconnected', (r) => {
+  console.warn('⚠️  Disconnected:', r, '— exiting so the supervisor restarts and prompts for re-auth.');
+  process.exit(1);
+});
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
   console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !relationships · !meetup · !absurd · !ai · !autoreply · !help');

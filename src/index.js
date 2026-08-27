@@ -18,6 +18,7 @@ const {
   MODEL,
 } = require('./claude');
 const { runCouncilCheck } = require('./council');
+const { hasValidToken } = require('./gmail');
 
 // 'scam' and 'discussion' are special modes (see claude.js toneInstruction),
 // not just a tone of voice — 'scam' scambaits an incoming scammer, keeping
@@ -27,6 +28,7 @@ const REPLY_TONES = ['casual', 'formal', 'funny', 'firm', 'warm', 'blunt', 'apol
 const REPLY_CONTEXT_COUNT = 10;
 const AUTOREPLY_CONTEXT_COUNT = 20; // live autoreply looks further back than manual !reply
 const CHATS_LIST_LIMIT = 10;
+const COUNCIL_POLL_INTERVAL_MS = 60 * 60 * 1000;
 
 if (!process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY.includes('...')) {
   console.error('❌ ANTHROPIC_API_KEY is missing or still the placeholder. Edit .env and paste your real key from https://console.anthropic.com/');
@@ -101,7 +103,29 @@ client.on('auth_failure', (m) => console.error('❌ Auth failure:', m));
 client.on('disconnected', (r) => console.warn('⚠️  Disconnected:', r));
 client.on('ready', () => {
   console.log(`✅ Bot is ready! Using model: ${MODEL}`);
-  console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !relationships · !meetup · !absurd · !ai · !autoreply · !help');
+  console.log('   Type commands in your own "Saved Messages" chat: !chats · !summary · !personal · !profile · !relationships · !meetup · !absurd · !ai · !councilpoll · !autoreply · !help');
+
+  if (hasValidToken()) {
+    setInterval(async () => {
+      try {
+        const { checked, posted } = await runCouncilCheck(client);
+        if (posted > 0) {
+          console.log(`Council check: ${checked} email(s) checked, ${posted} poll(s) posted.`);
+        }
+      } catch (err) {
+        console.error('Council check failed:', err.message || err);
+        try {
+          const selfChat = await client.getChatById(client.info.wid._serialized);
+          await selfChat.sendMessage(`⚠️ Council email check failed: ${err.message || err}`);
+        } catch {
+          /* ignore */
+        }
+      }
+    }, COUNCIL_POLL_INTERVAL_MS);
+    console.log(`   Council email check running every ${COUNCIL_POLL_INTERVAL_MS / 60000} min.`);
+  } else {
+    console.log('   Council email check disabled — run `npm run gmail:auth` to enable it.');
+  }
 });
 
 // ---------------------------------------------------------------------------

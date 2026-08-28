@@ -252,11 +252,22 @@ async function classifyCouncilEmail(subject, body) {
       'or "approve"/"reject"). Leave "options" as an empty array if the email does not spell out ' +
       'explicit choices — do not invent options. If "needsDecision" is false, set "question" to ' +
       'an empty string, "background" to an empty string, and "options" to an empty array.\n\n' +
-      'Set "background" to ONE plain sentence of AT MOST 20 WORDS saying what the management ' +
+      'Set "background" to ONE plain sentence of AT MOST 25 WORDS saying what the management ' +
       'office is proposing, so a council member who has not read the email thread still ' +
       'understands what they are voting on. Use only facts stated in the email — keep the ' +
       'single most decision-relevant detail (the amount, the vendor, or the date) and drop ' +
-      'the rest.' +
+      'the rest.\n\n' +
+
+      // Money is the thing council members actually vote on, and a poll that
+      // hides the number forces everyone back into the email thread to find it.
+      'MONEY RULE: if the decision involves money, the amount MUST appear in "background", ' +
+      'verbatim with its currency as written in the email (e.g. "RM1,200", "RM3.50/month"). ' +
+      'Never round it, never replace it with a word like "a fee" or "the cost". If the email ' +
+      'gives several figures, use the one being voted on, plus any per-resident or recurring ' +
+      'amount. If the email states no figure, say "amount not stated". For credit card or ' +
+      'other payment-method proposals, list the charge the resident pays — the surcharge or ' +
+      'processing fee (percentage and/or flat amount) and what it applies to. Amounts take ' +
+      'priority over every other detail inside the word limit.\n\n' +
 
       'Set "question" to the decision itself in AT MOST 15 WORDS. "background" and ' +
       '"question" are shown joined together and are hard-truncated past 255 characters ' +

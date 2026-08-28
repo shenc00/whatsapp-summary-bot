@@ -10,3 +10,6 @@ council-state.json
 .heartbeat
 qr.txt
 .wwebjs_auth.stale.*
+
+# Local code-graph cache (tokensave MCP), machine-specific.
+.tokensave/

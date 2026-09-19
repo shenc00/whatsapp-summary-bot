@@ -1,6 +1,6 @@
 // One-time interactive Gmail OAuth setup. Run: npm run gmail:auth
 require('dotenv').config();
-const http = require('http');
+const readline = require('readline');
 const fs = require('fs');
 const { google } = require('googleapis');
 const { REDIRECT_URI, SCOPES, TOKEN_PATH } = require('./gmail');
@@ -22,15 +22,21 @@ const authUrl = oAuth2Client.generateAuthUrl({
   prompt: 'consent',
 });
 
-const port = Number(new URL(REDIRECT_URI).port);
-const server = http.createServer(async (req, res) => {
-  if (!req.url.startsWith('/oauth2callback')) {
-    res.end('Not found.');
-    return;
-  }
-  const code = new URL(req.url, REDIRECT_URI).searchParams.get('code');
-  res.end('Authenticated — you can close this tab and return to the terminal.');
-  server.close();
+console.log('\n📧 Open this URL in a browser and approve access with cshen.1002@gmail.com:\n');
+console.log(authUrl + '\n');
+// ponytail: no local callback server — this runs on a remote VPS while the
+// browser is local, so the redirect to localhost always fails there anyway.
+// The code sits right in that failed URL's query string; paste it back here.
+console.log('The browser will land on a "site can\'t be reached" page after approving — that\'s expected.');
+console.log('Copy the "code=" value (or the whole URL) from its address bar and paste it below.\n');
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+rl.question('Paste code or redirected URL: ', async (answer) => {
+  rl.close();
+  const trimmed = answer.trim();
+  const code = trimmed.includes('code=')
+    ? new URL(trimmed, REDIRECT_URI).searchParams.get('code')
+    : trimmed;
   try {
     const { tokens } = await oAuth2Client.getToken(code);
     fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
@@ -39,9 +45,4 @@ const server = http.createServer(async (req, res) => {
     console.error('❌ Failed to exchange code for token:', err.message);
     process.exitCode = 1;
   }
-});
-
-server.listen(port, () => {
-  console.log('\n📧 Open this URL in a browser and approve access with cshen.1002@gmail.com:\n');
-  console.log(authUrl + '\n');
 });

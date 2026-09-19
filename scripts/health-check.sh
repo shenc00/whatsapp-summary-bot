@@ -49,7 +49,15 @@ if [ "$pm_status" = online ]; then
   age=$(( $(date +%s) - mtime ))
   if [ "$mtime" -eq 0 ] || [ "$age" -gt "$HEARTBEAT_MAX" ]; then
     [ "$mtime" -eq 0 ] && age_txt="never linked since restart" || age_txt="last alive $((age/60))m ago"
+    prev_session=$(cat "$STATE/whatsapp-session" 2>/dev/null || echo ok)
     report whatsapp-session fail "whatsapp-bot process online but WhatsApp session is down ($age_txt) - needs re-link"
+    # Only auto-restart on the ok->fail transition, not every 5-min tick while
+    # still failing - a dead refresh token won't be fixed by restarting, and
+    # restarting every cron run would fight a session still mid-reconnect.
+    if [ "$prev_session" = ok ]; then
+      pm2 restart whatsapp-bot >/dev/null 2>&1
+      notify "🔁 auto-restarted whatsapp-bot (stale session)"
+    fi
   else
     report whatsapp-session ok ""
   fi
